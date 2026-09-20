@@ -1,170 +1,189 @@
-# Universal Manipulation Interface
+# UMI Mini
 
-[[Project page]](https://umi-gripper.github.io/)
-[[Paper]](https://umi-gripper.github.io/#paper)
-[[Hardware Guide]](https://docs.google.com/document/d/1TPYwV9sNVPAi0ZlAupDMkXZ4CA1hsZx7YDMSmcEy6EU/edit?usp=sharing)
-[[Data Collection Instruction]](https://swanky-sphere-ad1.notion.site/UMI-Data-Collection-Tutorial-4db1a1f0f2aa4a2e84d9742720428b4c?pvs=4)
-[[SLAM repo]](https://github.com/cheng-chi/ORB_SLAM3)
-[[SLAM docker]](https://hub.docker.com/r/chicheng/orb_slam3)
+这是一个精简版的 [Universal Manipulation Interface（UMI）](https://umi-gripper.github.io/) 仓库，用于在处理完成的 UMI 数据集上训练 Diffusion Policy。原项目详情参见 [UMI 论文](https://umi-gripper.github.io/#paper)。
 
-<img width="90%" src="assets/umi_teaser.png">
+## 安装
 
-[Cheng Chi](http://cheng-chi.github.io/)<sup>1,2</sup>,
-[Zhenjia Xu](https://www.zhenjiaxu.com/)<sup>1,2</sup>,
-[Chuer Pan](https://chuerpan.com/)<sup>1</sup>,
-[Eric Cousineau](https://www.eacousineau.com/)<sup>3</sup>,
-[Benjamin Burchfiel](http://www.benburchfiel.com/)<sup>3</sup>,
-[Siyuan Feng](https://www.cs.cmu.edu/~sfeng/)<sup>3</sup>,
+本项目已在 Ubuntu 22.04 上测试。首先安装系统依赖：
 
-[Russ Tedrake](https://groups.csail.mit.edu/locomotion/russt.html)<sup>3</sup>,
-[Shuran Song](https://www.cs.columbia.edu/~shurans/)<sup>1,2</sup>
-
-<sup>1</sup>Stanford University,
-<sup>2</sup>Columbia University,
-<sup>3</sup>Toyota Research Institute
-
-## 🛠️ Installation
-Only tested on Ubuntu 22.04
-
-Install docker following the [official documentation](https://docs.docker.com/engine/install/ubuntu/) and finish [linux-postinstall](https://docs.docker.com/engine/install/linux-postinstall/).
-
-Install system-level dependencies:
-```console
-$ sudo apt install -y libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf
+```bash
+sudo apt install -y libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf libspnav-dev libomp-dev exiftool
 ```
 
-We recommend [Miniforge](https://github.com/conda-forge/miniforge?tab=readme-ov-file#miniforge3) instead of the standard anaconda distribution for faster installation: 
-```console
-$ mamba env create -f conda_environment.yaml
+安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，然后创建 Python 环境并安装依赖：
+
+```bash
+uv python install 3.11
+uv sync
 ```
 
-Activate environment
-```console
-$ conda activate umi
-(umi)$ 
+项目使用 CUDA 12.8 索引中的 PyTorch wheel。使用 GPU 训练时，需要安装兼容的 NVIDIA 驱动。
+
+## 训练
+
+准备处理完成的 UMI Zarr 数据集，然后运行 UMI 训练配置：
+
+```bash
+uv run python train.py \
+    --config-name=train_diffusion_unet_timm_umi_workspace \
+    task.dataset_path=/path/to/dataset.zarr.zip
 ```
 
-## Running UMI SLAM pipeline
-Download example data
-```console
-(umi)$ wget --recursive --no-parent --no-host-directories --cut-dirs=2 --relative --reject="index.html*" https://real.stanford.edu/umi/data/example_demo_session/
+使用多张 GPU 训练：
+
+```bash
+uv run accelerate launch \
+    --num_processes <number-of-gpus> train.py \
+    --config-name=train_diffusion_unet_timm_umi_workspace \
+    task.dataset_path=/path/to/dataset.zarr.zip
 ```
 
-Run SLAM pipeline
-```console
-(umi)$ python run_slam_pipeline.py example_demo_session
+可以使用原项目提供的[杯子排列任务数据集](https://real.stanford.edu/umi/data/zarr_datasets/)进行训练。本仓库不包含数据采集或 SLAM 预处理脚本。
 
-...
-Found following cameras:
-camera_serial
-C3441328164125    5
-Name: count, dtype: int64
-Assigned camera_idx: right=0; left=1; non_gripper=2,3...
-             camera_serial  gripper_hw_idx                                     example_vid
-camera_idx                                                                                
-0           C3441328164125               0  demo_C3441328164125_2024.01.10_10.57.34.882133
-99% of raw data are used.
-defaultdict(<function main.<locals>.<lambda> at 0x7f471feb2310>, {})
-n_dropped_demos 0
-````
-For this dataset, 99% of the data are useable (successful SLAM), with 0 demonstrations dropped. If your dataset has a low SLAM success rate, double check if you carefully followed our [data collection instruction](https://swanky-sphere-ad1.notion.site/UMI-Data-Collection-Instruction-4db1a1f0f2aa4a2e84d9742720428b4c). 
+## 训练如何初始化
 
-Despite our significant effort on robustness improvement, OBR_SLAM3 is still the most fragile part of UMI pipeline. If you are an expert in SLAM, please consider contributing to our fork of [OBR_SLAM3](https://github.com/cheng-chi/ORB_SLAM3) which is specifically optimized for UMI workflow.
+训练配置由 Hydra 根据顶层实验 config 和 task config 组合生成。例如：
 
-Generate dataset for training.
-```console
-(umi)$ python scripts_slam_pipeline/07_generate_replay_buffer.py -o example_demo_session/dataset.zarr.zip example_demo_session
+```bash
+uv run python train.py \
+    --config-name=train_diffusion_unet_timm_umi_workspace \
+    task.dataset_path=/path/to/dataset.zarr.zip
 ```
 
-## Training Diffusion Policy
-Single-GPU training. Tested to work on RTX3090 24GB.
-```console
-(umi)$ python train.py --config-name=train_diffusion_unet_timm_umi_workspace task.dataset_path=example_demo_session/dataset.zarr.zip
+初始化流程如下：
+
+1. `train.py` 加载 `diffusion_policy/config/<config-name>.yaml`，并解析其中所有 Hydra 插值。
+2. 顶层 `_target_` 指定并实例化训练 workspace。
+3. workspace 实例化 `cfg.policy`；policy 再根据各自的 `_target_` 实例化 diffusion scheduler 和 observation encoder。
+4. workspace 实例化 `cfg.task.dataset`，创建训练与验证 DataLoader，计算数据集 normalizer，并将其设置到 policy 中。
+5. epoch 循环开始前，model、optimizer、scheduler 和 DataLoader 会交给 Hugging Face Accelerate。若 `training.use_ema: true`，还会创建一份 policy 的 EMA 副本。
+
+两条初始化分支最终在训练环节汇合：
+
+```mermaid
+flowchart LR
+    N["网络初始化<br/>Hydra YAML → workspace<br/>policy + observation encoder<br/>U-Net 或 Transformer denoiser<br/>noise scheduler + optimizer"]
+    Z["Zarr 切分与预处理<br/>episode 训练集/验证集切分<br/>horizon + latency + downsampling<br/>位姿转换 + normalizer 统计量<br/>DataLoader batch"]
+    A["在线图像增广<br/>RandomCrop + resize<br/>ColorJitter / 其他 transforms<br/>在 observation encoder 内执行"]
+    T["Diffusion 训练<br/>编码 observations<br/>向 action trajectory 添加噪声<br/>预测 noise 或 sample target<br/>MSE loss → backward → EMA"]
+
+    N -->|已初始化的模块| T
+    Z -->|RGB observations| A
+    A -->|增广后的图像| T
+    Z -->|低维 observations + actions| T
 ```
 
-Multi-GPU training.
-```console
-(umi)$ accelerate --num_processes <ngpus> train.py --config-name=train_diffusion_unet_timm_umi_workspace task.dataset_path=example_demo_session/dataset.zarr.zip
+图像增广属于 model forward，而不是离线 Zarr 转换步骤。只有 RGB observations 会经过图像增广；低维 observations 和 actions 从准备好的 batch 直接进入归一化和 Diffusion 训练。
+
+不修改 YAML 也可以通过命令行覆盖 Hydra 配置。例如：
+
+```bash
+uv run python train.py \
+    --config-name=train_diffusion_unet_timm_umi_workspace \
+    task.dataset_path=/path/to/dataset.zarr.zip \
+    dataloader.batch_size=32 \
+    training.num_epochs=200 \
+    policy.obs_encoder.pretrained=false
 ```
 
-Downloading in-the-wild cup arrangement dataset (processed).
-```console
-(umi)$ wget https://real.stanford.edu/umi/data/zarr_datasets/cup_in_the_wild.zarr.zip
+### 选择神经网络架构
+
+通过顶层 config 名称选择 denoiser 架构。不能只修改类似 `model: unet` 的单个字符串，因为每份 config 都指定了一组互相兼容的 workspace、policy 和 observation encoder。
+
+| 架构 | Config 名称 | Denoiser | Observation conditioning |
+| --- | --- | --- | --- |
+| 1-D U-Net | `train_diffusion_unet_timm_umi_workspace` | `ConditionalUnet1D` | 将 Timm 图像特征与低维 observations 展平并拼接为一个 global condition vector。 |
+| Transformer | `train_diffusion_transformer_umi_workspace` | `TransformerForActionDiffusion` | 将图像特征与低维 observations 投影为 `n_emb` tokens，作为 conditioning tokens 输入。 |
+
+两种架构进行 Diffusion 的对象都是 **action trajectory**，而不是相机图像。相机 encoder 负责生成 observation condition，用于对 action trajectory 去噪。
+
+U-Net 配置中的关键 Hydra targets 为：
+
+```yaml
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+
+policy:
+  _target_: diffusion_policy.policy.diffusion_unet_timm_policy.DiffusionUnetTimmPolicy
+  noise_scheduler:
+    _target_: diffusers.DDIMScheduler
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
 ```
 
-Multi-GPU training.
-```console
-(umi)$ accelerate --num_processes <ngpus> train.py --config-name=train_diffusion_unet_timm_umi_workspace task.dataset_path=cup_in_the_wild.zarr.zip
+Transformer 配置会替换以下三个项目 targets：
+
+```yaml
+_target_: diffusion_policy.workspace.train_diffusion_transformer_timm_workspace.TrainDiffusionTransformerTimmWorkspace
+
+policy:
+  _target_: diffusion_policy.policy.diffusion_transformer_timm_policy.DiffusionTransformerTimmPolicy
+  noise_scheduler:
+    _target_: diffusers.DDIMScheduler
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.transformer_obs_encoder.TransformerObsEncoder
 ```
 
-## 🦾 Real-world Deployment
-In this section, we will demonstrate our real-world deployment/evaluation system with the cup arrangement policy. While this policy setup only requires a single arm and camera, the our system supports up to 2 arms and unlimited number of cameras.
+架构相关参数位于 `policy` 下。例如，U-Net 使用 `diffusion_step_embed_dim`、`down_dims`、`kernel_size` 和 `n_groups`；Transformer 使用 `n_layer`、`n_head`、`n_emb` 和 `p_drop_attn`。
 
-### ⚙️ Hardware Setup
-1. Build deployment hardware according to our [Hardware Guide](https://docs.google.com/document/d/1TPYwV9sNVPAi0ZlAupDMkXZ4CA1hsZx7YDMSmcEy6EU).
-2. Setup UR5 with teach pendant:
-    * Obtain IP address and update [eval_robots_config.yaml](example/eval_robots_config.yaml)/robots/robot_ip.
-    * In Installation > Payload
-        * Set mass to 1.81 kg
-        * Set center of gravity to (2, -6, 37)mm, CX/CY/CZ.
-    * TCP will be set automatically by the eval script.
-    * On UR5e, switch control mode to remote.
+视觉 backbone 由 `policy.obs_encoder.model_name` 单独选择，可以使用受支持的 Timm ViT、ResNet 或 ConvNeXt 模型。`pretrained` 控制是否加载预训练权重，`frozen` 控制是否冻结 backbone 参数。
 
-    If you are using Franka, follow this [instruction](franka_instruction.md).
-3. Setup WSG50 gripper with web interface:
-    * Obtain IP address and update [eval_robots_config.yaml](example/eval_robots_config.yaml)/grippers/gripper_ip.
-    * In Settings > Command Interface
-        * Disable "Use text based Interface"
-        * Enable CRC
-    * In Scripting > File Manager
-        * Upload [umi/real_world/cmd_measure.lua](umi/real_world/cmd_measure.lua)
-    * In Settings > System
-        * Enable Startup Script
-        * Select `/user/cmd_measure.lua` you just uploaded.
-4. Setup GoPro:
-    * Install GoPro Labs [firmware](https://gopro.com/en/us/info/gopro-labs).
-    * Set date and time.
-    * Scan the following QR code for clean HDMI output 
-    <br><img width="50%" src="assets/QR-MHDMI1mV0r27Tp60fWe0hS0sLcFg1dV.png">
-5. Setup [3Dconnexion SpaceMouse](https://www.amazon.com/3Dconnexion-SpaceMouse-Wireless-universal-receiver/dp/B079V367MM):
-    * Install libspnav `sudo apt install libspnav-dev spacenavd`
-    * Start spnavd `sudo systemctl start spacenavd`
+仓库中的双臂配置使用 `task: umi_bimanual`。task config 负责定义 observation keys、shape、horizon 和最终 action dimension；policy 通过 `shape_meta: ${task.shape_meta}` 读取这些值。
 
-### 🤗 Reproducing the Cup Arrangement Policy ☕
-Our in-the-wild cup arragement policy is trained with the distribution of ["espresso cup with saucer"](https://www.amazon.com/s?k=espresso+cup+with+saucer) on Amazon across 30 different locations around Stanford. We created a [Amazon shopping list](https://www.amazon.com/hz/wishlist/ls/Q0T8U2N5U3IU?ref_=wl_share) for all cups used for training. We published the processed [Zarr dataset and](https://real.stanford.edu/umi/data/zarr_datasets) pre-trained [checkpoint](https://real.stanford.edu/umi/data/pretrained_models/) (finetuned CLIP ViT-L backbone).
+## 从 Zarr 数据到 Diffusion 训练 batch
 
-<img width="90%" src="assets/umi_cup.gif">
+处理完成的数据集应是压缩的 Zarr store，逻辑结构如下：
 
-Download pre-trained checkpoint.
-```console
-(umi)$ wget https://real.stanford.edu/umi/data/pretrained_models/cup_wild_vit_l_1img.ckpt
+```text
+dataset.zarr.zip
+├── data/
+│   ├── camera0_rgb
+│   ├── robot0_eef_pos
+│   ├── robot0_eef_rot_axis_angle
+│   ├── robot0_gripper_width
+│   └── action                 # 可选；缺失时根据 robot state 重建
+└── meta/
+    └── episode_ends
 ```
 
-Grant permission to the HDMI capture card.
-```console
-(umi)$ sudo chmod -R 777 /dev/bus/usb
+一次训练实际读取哪些 keys，由 task config 中的 `shape_meta` 声明。因此，Zarr keys 必须与 YAML 中的 keys 一致。单个训练样本按以下步骤生成：
+
+1. `UmiDataset` 打开 zip store，并将其复制到内存中的 Zarr store。如果设置了 `cache_dir`，则会创建或复用由文件锁保护的 LMDB cache。
+2. 根据 `val_ratio` 和 `seed`，以 episode 为单位切分训练集和验证集。
+3. `SequenceSampler` 将每个符合条件的时间索引转换为一个样本。对于每个 key，它会应用 YAML 中配置的 `horizon`、`latency_steps` 和 `down_sample_steps`。若 episode 起始位置缺少历史 observation，则使用第一个可用帧向前填充。Action sequence 从当前索引向未来截取，并可在 episode 末尾选择性填充。
+4. 对带有非整数 latency 的低维信号进行插值，其中旋转向量使用球面插值。RGB 数组在样本被请求前一直以压缩形式保留在 Zarr 中。
+5. `UmiDataset.__getitem__` 将 RGB 从 `T,H,W,C` uint8 转换为 `[0,1]` 范围内的 `T,C,H,W` float32。末端执行器 observations/actions 会转换为配置的 pose representation，旋转则输出为 6-D representation。返回的数据结构为：
+
+   ```text
+   batch["obs"][observation_key]  # 经 DataLoader 组 batch 后为 B,T,...
+   batch["action"]                # B,action_horizon,action_dim
+   ```
+
+6. 训练开始前，`get_normalizer()` 会扫描训练样本。Position 和 gripper 数据采用 range normalization，6-D rotation 使用 identity normalizer，图像保持在 `[0,1]`。生成的 normalizer 会保存为运行目录中的 `normalizer.pkl`，并由每个 Accelerate process 加载。
+7. 在 `policy.compute_loss` 中，observations 和 actions 首先被归一化。Observation encoder 随后生成一个 global condition vector（U-Net）或一组 conditioning tokens（Transformer）。程序随机采样 diffusion timestep 和 Gaussian noise，由 scheduler 对归一化后的 action trajectory 加噪；denoiser 最终通过 MSE 学习配置的预测目标，本仓库默认配置为 `epsilon`。
+
+### 图像增广在哪里执行
+
+图像增广在 `policy.obs_encoder.transforms` 中配置。例如：
+
+```yaml
+policy:
+  obs_encoder:
+    transforms:
+      - type: RandomCrop
+        ratio: 0.95
+      - _target_: torchvision.transforms.ColorJitter
+        brightness: 0.3
+        contrast: 0.4
+        saturation: 0.5
+        hue: 0.08
 ```
 
-Launch eval script.
-```console
-(umi)$ python eval_real.py --robot_config=example/eval_robots_config.yaml -i cup_wild_vit_l.ckpt -o data/eval_cup_wild_example
-```
-After the script started, use your spacemouse to control the robot and the gripper (spacemouse buttons). Press `C` to start the policy. Press `S` to stop.
+Hydra 会实例化标准 Torchvision transforms。自定义的 `RandomCrop` 项会由 observation encoder 展开为 `RandomCrop(0.95 * image_size)`，然后 resize 回配置的图像尺寸。
 
-If everything are setup correctly, your robot should be able to rotate the cup and placing it onto the saucer, anywhere 🎉
+DataLoader batch 进入 policy 后，transforms 会在 `TimmObsEncoder.forward()` 或 `TransformerObsEncoder.forward()` 中、进入 Timm visual backbone 前执行。因此，图像增广不会修改 Zarr 数据集或 cache 中的样本。
 
-Known issue ⚠️: The policy doesn't work well under direct sunlight, since the dataset was collected during a rainiy week at Stanford.
+当前实现无论 module 处于 training mode 还是 evaluation mode，都会调用 transform pipeline。因此，配置的 random crop、`ColorJitter` 以及其他随机 transforms 也会在验证和 action prediction 时运行。需要确定性评估时，应从 config 中移除随机 transforms，或者修改 encoder，使其仅在 `self.training` 为 true 时执行这些 transforms。
 
-### 🤗 Reproducing Policies on ARX X5 Robot Arms
-Please follow [umi-on-legs](https://github.com/real-stanford/umi-on-legs) for hardware modification and [umi-arx](https://github.com/real-stanford/umi-arx) for detailed policy deployment instructions. 
+## 许可证
 
-<img width="90%" src="assets/umi_cup_arx.gif">
-
-## 🏷️ License
-This repository is released under the MIT license. See [LICENSE](LICENSE) for additional details.
-
-## 🙏 Acknowledgement
-* Our GoPro SLAM pipeline is adapted from [Steffen Urban](https://github.com/urbste)'s [fork](https://github.com/urbste/ORB_SLAM3) of [OBR_SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3).
-* We used [Steffen Urban](https://github.com/urbste)'s [OpenImuCameraCalibrator](https://github.com/urbste/OpenImuCameraCalibrator/) for camera and IMU calibration.
-* The UMI gripper's core mechanism is adpated from [Push/Pull Gripper](https://www.thingiverse.com/thing:2204113) by [John Mulac](https://www.thingiverse.com/3dprintingworld/designs).
-* UMI's soft finger is adapted from [Alex Alspach](http://alexalspach.com/)'s original design at TRI.
+本项目基于 [MIT License](LICENSE) 发布，并基于原始 [UMI 项目](https://umi-gripper.github.io/)开发。
