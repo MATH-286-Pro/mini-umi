@@ -113,3 +113,54 @@ def convert_pose_mat_rep(
         out_tf[..., :3, 3] = out_pos
         return out_tf
     raise RuntimeError(f"Unsupported pose_rep: {pose_rep}")
+
+
+def compute_relative_pose(
+    pos: np.ndarray,
+    rot: np.ndarray,
+    base_pos: np.ndarray | None,
+    base_rot_mat: np.ndarray,
+    rot_transformer_to_mat,
+    rot_transformer_to_target,
+    backward: bool = False,
+    delta: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert position and rotation sequences to or from a base-relative form.
+
+    ``rot_transformer_to_mat`` converts the input rotation representation to
+    matrices. ``rot_transformer_to_target`` converts matrices to the output
+    representation. With ``delta=True``, the first element is relative to the
+    supplied base and subsequent elements are relative to their predecessor.
+    """
+    if not backward:
+        if not delta:
+            output_pos = pos if base_pos is None else pos - base_pos
+            output_rot = rot_transformer_to_target.forward(
+                rot_transformer_to_mat.forward(rot) @ np.linalg.inv(base_rot_mat)
+            )
+            return output_pos, output_rot
+
+        all_pos = np.concatenate([base_pos[None, ...], pos], axis=0)
+        output_pos = np.diff(all_pos, axis=0)
+        rot_mat = rot_transformer_to_mat.forward(rot)
+        all_rot_mat = np.concatenate([base_rot_mat[None, ...], rot_mat], axis=0)
+        output_rot_mat = all_rot_mat[1:] @ np.linalg.inv(all_rot_mat[:-1])
+        output_rot = rot_transformer_to_target.forward(output_rot_mat)
+        return output_pos, output_rot
+
+    if not delta:
+        output_pos = pos if base_pos is None else pos + base_pos
+        output_rot = rot_transformer_to_mat.inverse(
+            rot_transformer_to_target.inverse(rot) @ base_rot_mat
+        )
+        return output_pos, output_rot
+
+    output_pos = np.cumsum(pos, axis=0) + base_pos
+    rot_mat = rot_transformer_to_target.inverse(rot)
+    output_rot_mat = np.zeros_like(rot_mat)
+    current_rot_mat = base_rot_mat
+    for idx in range(len(rot_mat)):
+        current_rot_mat = rot_mat[idx] @ current_rot_mat
+        output_rot_mat[idx] = current_rot_mat
+    output_rot = rot_transformer_to_mat.inverse(output_rot_mat)
+    return output_pos, output_rot
