@@ -12,7 +12,7 @@ from tqdm import trange, tqdm
 from filelock import FileLock
 import shutil
 
-from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs
+from diffusion_policy.dataset.codecs.imagecodecs_numcodecs import register_codecs
 from diffusion_policy.common.normalize_util import (
     array_to_stats, concatenate_normalizer, get_identity_normalizer_from_stat,
     get_image_identity_normalizer, get_range_normalizer_from_stat)
