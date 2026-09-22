@@ -1,6 +1,8 @@
+# @package _global_
+
 defaults:
   - _self_
-  - task: lift_image_abs
+  - /task: lift_image_abs
 
 name: train_diffusion_unet_image
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace

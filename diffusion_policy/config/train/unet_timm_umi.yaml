@@ -1,6 +1,8 @@
+# @package _global_
+
 defaults:
   - _self_
-  - task: umi_bimanual
+  - /task: umi
 
 name: train_diffusion_unet_timm
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
@@ -63,11 +65,12 @@ policy:
     transforms:
       - type: RandomCrop
         ratio: 0.95
-      - _target_: torchvision.transforms.RandomRotation
-        degrees:
-          - -5.0
-          - 5.0
-        expand: false
+      # RandomRotation is not compatible with BF16
+      # - _target_: torchvision.transforms.RandomRotation
+      #   degrees:
+      #     - -5.0
+      #     - 5.0
+      #   expand: false
       - _target_: torchvision.transforms.ColorJitter
         brightness: 0.3
         contrast: 0.4
@@ -101,6 +104,9 @@ policy:
   n_groups: 8
   cond_predict_scale: True
   input_pertub: 0.1 # reference: https://github.com/forever208/DDPM-IP
+  # train multiple diffusion steps per obs encoder forward pass
+  # doing this too much will cause instability!
+  train_diffusion_n_samples: 1
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -111,14 +117,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: False
   pin_memory: True
@@ -153,7 +159,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 2000
-  num_epochs: 100
+  num_epochs: 120
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
@@ -162,7 +168,7 @@ training:
   # training loop control
   # in epochs
   checkpoint_every: 10
-  val_every: 5
+  val_every: 1
   sample_every: 5
   # steps per epoch
   max_train_steps: null
