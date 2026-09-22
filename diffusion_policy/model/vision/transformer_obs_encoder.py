@@ -314,7 +314,7 @@ def test():
     OmegaConf.register_new_resolver("eval", eval, replace=True)
 
     with hydra.initialize('../diffusion_policy/config'):
-        cfg = hydra.compose('train_diffusion_transformer_umi_workspace')
+        cfg = hydra.compose('train/transformer_umi')
         OmegaConf.resolve(cfg)
 
     shape_meta = cfg.task.shape_meta

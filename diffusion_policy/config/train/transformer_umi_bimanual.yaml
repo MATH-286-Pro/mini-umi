@@ -1,6 +1,8 @@
+# @package _global_
+
 defaults:
   - _self_
-  - task: umi_bimanual
+  - /task: umi_bimanual
 
 name: train_diffusion_transformer_timm
 _target_: diffusion_policy.workspace.train_diffusion_transformer_timm_workspace.TrainDiffusionTransformerTimmWorkspace

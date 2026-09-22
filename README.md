@@ -25,7 +25,7 @@ uv sync
 
 ```bash
 uv run python train.py \
-    --config-name=train_diffusion_unet_timm_umi_workspace \
+    --config-name=train/unet_timm_umi \
     task.dataset_path=/path/to/dataset.zarr.zip
 ```
 
@@ -34,7 +34,7 @@ uv run python train.py \
 ```bash
 uv run accelerate launch \
     --num_processes <number-of-gpus> train.py \
-    --config-name=train_diffusion_unet_timm_umi_workspace \
+    --config-name=train/unet_timm_umi \
     task.dataset_path=/path/to/dataset.zarr.zip
 ```
 
@@ -46,13 +46,13 @@ uv run accelerate launch \
 
 ```bash
 uv run python train.py \
-    --config-name=train_diffusion_unet_timm_umi_workspace \
+    --config-name=train/unet_timm_umi \
     task.dataset_path=/path/to/dataset.zarr.zip
 ```
 
 初始化流程如下：
 
-1. `train.py` 加载 `diffusion_policy/config/<config-name>.yaml`，并解析其中所有 Hydra 插值。
+1. `train.py` 加载 `diffusion_policy/config/train/<config-name>.yaml`，并解析其中所有 Hydra 插值。
 2. 顶层 `_target_` 指定并实例化训练 workspace。
 3. workspace 实例化 `cfg.policy`；policy 再根据各自的 `_target_` 实例化 diffusion scheduler 和 observation encoder。
 4. workspace 实例化 `cfg.task.dataset`，创建训练与验证 DataLoader，计算数据集 normalizer，并将其设置到 policy 中。
@@ -79,7 +79,7 @@ flowchart LR
 
 ```bash
 uv run python train.py \
-    --config-name=train_diffusion_unet_timm_umi_workspace \
+    --config-name=train/unet_timm_umi \
     task.dataset_path=/path/to/dataset.zarr.zip \
     dataloader.batch_size=32 \
     training.num_epochs=200 \
@@ -92,8 +92,8 @@ uv run python train.py \
 
 | 架构 | Config 名称 | Denoiser | Observation conditioning |
 | --- | --- | --- | --- |
-| 1-D U-Net | `train_diffusion_unet_timm_umi_workspace` | `ConditionalUnet1D` | 将 Timm 图像特征与低维 observations 展平并拼接为一个 global condition vector。 |
-| Transformer | `train_diffusion_transformer_umi_workspace` | `TransformerForActionDiffusion` | 将图像特征与低维 observations 投影为 `n_emb` tokens，作为 conditioning tokens 输入。 |
+| 1-D U-Net | `train/unet_timm_umi` | `ConditionalUnet1D` | 将 Timm 图像特征与低维 observations 展平并拼接为一个 global condition vector。 |
+| Transformer | `train/transformer_umi` | `TransformerForActionDiffusion` | 将图像特征与低维 observations 投影为 `n_emb` tokens，作为 conditioning tokens 输入。 |
 
 两种架构进行 Diffusion 的对象都是 **action trajectory**，而不是相机图像。相机 encoder 负责生成 observation condition，用于对 action trajectory 去噪。
 
