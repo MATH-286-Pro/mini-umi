@@ -16,13 +16,12 @@ from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs
 from diffusion_policy.common.normalize_util import (
     array_to_stats, concatenate_normalizer, get_identity_normalizer_from_stat,
     get_image_identity_normalizer, get_range_normalizer_from_stat)
-from diffusion_policy.common.pose_repr_util import convert_pose_mat_rep
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.sampler import SequenceSampler, get_val_mask
 from diffusion_policy.dataset.base_dataset import BaseDataset
 from diffusion_policy.model.common.normalizer import LinearNormalizer
-from umi.common.pose_util import pose_to_mat, mat_to_pose10d
+from tool.linalg import convert_pose_mat_rep, mat_to_pose10d, pose_to_mat
 
 register_codecs()
 

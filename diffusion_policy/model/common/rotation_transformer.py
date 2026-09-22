@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.spatial.transform as st
-from umi.common.pose_util import rot6d_to_mat, mat_to_rot6d
+from tool.linalg import mat_to_rot6d, rot6d_to_mat
 
 # converting full name to scipy Rotation name
 scipy_rep_map = {
