@@ -15,7 +15,7 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs
+from diffusion_policy.dataset.codecs.imagecodecs_numcodecs import register_codecs
 from diffusion_policy.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
 from diffusion_policy.common.normalize_util import (
