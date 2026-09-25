@@ -60,7 +60,6 @@ class UmiDatasetZarr(UmiDatasetBase):
             shape_meta: dict,
             dataset_path: str,
             cache_dir: Optional[str]=None,
-            pose_repr: dict={},
             action_padding: bool=False,
             temporally_independent_normalization: bool=False,
             repeat_frame_prob: float=0.0,
@@ -73,7 +72,6 @@ class UmiDatasetZarr(UmiDatasetBase):
         super().__init__(
             shape_meta=shape_meta,
             replay_buffer=replay_buffer,
-            pose_repr=pose_repr,
             action_padding=action_padding,
             temporally_independent_normalization=temporally_independent_normalization,
             repeat_frame_prob=repeat_frame_prob,

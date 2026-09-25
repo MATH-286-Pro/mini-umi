@@ -20,7 +20,6 @@ class UmiDatasetBase(BaseDataset):
     def __init__(self,
         shape_meta: dict,
         replay_buffer: ReplayBuffer,
-        pose_repr: dict={},
         action_padding: bool=False,
         temporally_independent_normalization: bool=False,
         repeat_frame_prob: float=0.0,
@@ -30,10 +29,6 @@ class UmiDatasetBase(BaseDataset):
         image_transform=None,
         normalizer_num_workers: int=32
     ):
-        self.pose_repr = pose_repr
-        self.obs_pose_repr = self.pose_repr.get('obs_pose_repr', 'rel')
-        self.action_pose_repr = self.pose_repr.get('action_pose_repr', 'rel')
-        
         self.num_robot = 0
         rgb_keys = list()
         lowdim_keys = list()
@@ -296,12 +291,12 @@ class UmiDatasetBase(BaseDataset):
             obs_pose_mat = convert_pose_mat_rep(
                 pose_mat, 
                 base_pose_mat=pose_mat[-1],
-                pose_rep=self.obs_pose_repr,
+                pose_rep='relative',
                 backward=False)
             action_pose_mat = convert_pose_mat_rep(
                 action_mat, 
                 base_pose_mat=pose_mat[-1],
-                pose_rep=self.action_pose_repr,
+                pose_rep='relative',
                 backward=False)
         
             # convert pose to pos + rot6d representation

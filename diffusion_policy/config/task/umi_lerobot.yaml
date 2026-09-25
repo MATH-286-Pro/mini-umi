@@ -9,7 +9,6 @@ dataset:
   _target_: diffusion_policy.dataset.dataloader_lerobot.UmiDatasetLeRobot
   shape_meta: ${task.shape_meta}
   dataset_path: ${task.dataset_path}
-  pose_repr: ${task.pose_repr}
   action_padding: false
   temporally_independent_normalization: false
   repeat_frame_prob: 0.0

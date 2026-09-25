@@ -115,16 +115,11 @@ shape_meta: &shape_meta
 
 task_name: &task_name umi
 dataset_path: &dataset_path data_workspace/fold_cloth/20231226_mirror_swap.zarr.zip
-pose_repr: &pose_repr
-  obs_pose_repr: relative # abs or rel
-  action_pose_repr: relative # abs or rel or delta
-
 dataset:
   _target_: diffusion_policy.dataset.dataloader_zarr.UmiDatasetZarr
   shape_meta: *shape_meta
   dataset_path: *dataset_path
   cache_dir: null
-  pose_repr: *pose_repr
   action_padding: False
   temporally_independent_normalization: False
   repeat_frame_prob: 0.0
