@@ -11,6 +11,7 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.model.vision.timm_obs_encoder import TimmObsEncoder
+from diffusion_policy.model.vision.image_augmentation import augment_observations
 from diffusion_policy.common.pytorch_util import dict_apply
 
 
@@ -19,6 +20,7 @@ class DiffusionUnetTimmPolicy(BaseImagePolicy):
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
             obs_encoder: TimmObsEncoder,
+            image_augmentor: nn.Module=None,
             num_inference_steps=None,
             obs_as_global_cond=True,
             diffusion_step_embed_dim=256,
@@ -60,6 +62,7 @@ class DiffusionUnetTimmPolicy(BaseImagePolicy):
         )
 
         self.obs_encoder = obs_encoder
+        self.image_augmentor = image_augmentor
         self.model = model
         self.noise_scheduler = noise_scheduler
         self.normalizer = LinearNormalizer()
@@ -170,6 +173,9 @@ class DiffusionUnetTimmPolicy(BaseImagePolicy):
         # normalize input
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
+        if self.training and self.image_augmentor is not None:
+            nobs = augment_observations(
+                nobs, self.obs_encoder.rgb_keys, self.image_augmentor)
         nactions = self.normalizer['action'].normalize(batch['action'])
         
         assert self.obs_as_global_cond

@@ -2,12 +2,11 @@ import torch
 import torchvision
 
 
-class SequenceImageAugmentor(torch.nn.Module):
-    """Apply one spatial/color transform consistently to an image history.
+class BatchImageAugmentor(torch.nn.Module):
+    """Augment batched image histories before visual feature extraction.
 
-    Input tensors use ``T,C,H,W``. Torchvision treats the leading time axis as
-    an additional batch dimension, so random parameters are shared by every
-    frame in the observation history.
+    Input tensors use ``B,T,C,H,W``. Each batch item draws independent random
+    parameters while every frame in one observation history shares them.
     """
 
     def __init__(self, image_shape: tuple, transforms: list):
@@ -29,6 +28,13 @@ class SequenceImageAugmentor(torch.nn.Module):
         self.transform = torch.nn.Identity() if not modules else torch.nn.Sequential(*modules)
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
-        if image.ndim != 4:
-            raise ValueError(f"Expected T,C,H,W image history, got shape {tuple(image.shape)}")
-        return self.transform(image)
+        if image.ndim != 5:
+            raise ValueError(f"Expected B,T,C,H,W image batch, got shape {tuple(image.shape)}")
+        return torch.stack([self.transform(sequence) for sequence in image], dim=0)
+
+
+def augment_observations(obs_dict: dict, rgb_keys: list[str], augmentor: BatchImageAugmentor) -> dict:
+    result = dict(obs_dict)
+    for key in rgb_keys:
+        result[key] = augmentor(result[key])
+    return result

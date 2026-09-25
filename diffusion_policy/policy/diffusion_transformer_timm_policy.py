@@ -11,6 +11,7 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.transformer_for_action_diffusion import TransformerForActionDiffusion
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.model.vision.transformer_obs_encoder import TransformerObsEncoder
+from diffusion_policy.model.vision.image_augmentation import augment_observations
 
 
 class DiffusionTransformerTimmPolicy(BaseImagePolicy):
@@ -18,6 +19,7 @@ class DiffusionTransformerTimmPolicy(BaseImagePolicy):
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
             obs_encoder: TransformerObsEncoder,
+            image_augmentor: nn.Module=None,
             num_inference_steps=None,
             input_pertub=0.1,
             # arch
@@ -51,6 +53,7 @@ class DiffusionTransformerTimmPolicy(BaseImagePolicy):
         )
 
         self.obs_encoder = obs_encoder
+        self.image_augmentor = image_augmentor
         self.model = model
         self.noise_scheduler = noise_scheduler
         self.normalizer = LinearNormalizer()
@@ -177,6 +180,9 @@ class DiffusionTransformerTimmPolicy(BaseImagePolicy):
         # normalize input
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
+        if self.training and self.image_augmentor is not None:
+            nobs = augment_observations(
+                nobs, self.obs_encoder.rgb_keys, self.image_augmentor)
         nactions = self.normalizer['action'].normalize(batch['action'])
         trajectory = nactions
         

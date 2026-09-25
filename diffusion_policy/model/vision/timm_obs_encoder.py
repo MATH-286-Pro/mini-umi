@@ -5,7 +5,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
 import logging
 
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
@@ -57,7 +56,6 @@ class TimmObsEncoder(ModuleAttrMixin):
             pretrained: bool,
             frozen: bool,
             global_pool: str,
-            transforms: list,
             # replace BatchNorm with GroupNorm
             use_group_norm: bool=False,
             # use single rgb model for all rgb inputs
@@ -79,7 +77,6 @@ class TimmObsEncoder(ModuleAttrMixin):
         rgb_keys = list()
         low_dim_keys = list()
         key_model_map = nn.ModuleDict()
-        key_transform_map = nn.ModuleDict()
         key_shape_map = dict()
 
         assert global_pool == ''
@@ -136,15 +133,6 @@ class TimmObsEncoder(ModuleAttrMixin):
             if type == 'rgb':
                 assert image_shape is None or image_shape == shape[1:]
                 image_shape = shape[1:]
-        if transforms is not None and not isinstance(transforms[0], torch.nn.Module):
-            assert transforms[0].type == 'RandomCrop'
-            ratio = transforms[0].ratio
-            transforms = [
-                torchvision.transforms.RandomCrop(size=int(image_shape[0] * ratio)),
-                torchvision.transforms.Resize(size=image_shape[0], antialias=True)
-            ] + transforms[1:]
-        transform = nn.Identity() if transforms is None else torch.nn.Sequential(*transforms)
-
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
             type = attr.get('type', 'low_dim')
@@ -155,8 +143,6 @@ class TimmObsEncoder(ModuleAttrMixin):
                 this_model = model if share_rgb_model else copy.deepcopy(model)
                 key_model_map[key] = this_model
 
-                this_transform = transform
-                key_transform_map[key] = this_transform
             elif type == 'low_dim':
                 if not attr.get('ignore_by_policy', False):
                     low_dim_keys.append(key)
@@ -173,7 +159,6 @@ class TimmObsEncoder(ModuleAttrMixin):
         self.model_name = model_name
         self.shape_meta = shape_meta
         self.key_model_map = key_model_map
-        self.key_transform_map = key_transform_map
         self.share_rgb_model = share_rgb_model
         self.rgb_keys = rgb_keys
         self.low_dim_keys = low_dim_keys
@@ -263,7 +248,6 @@ class TimmObsEncoder(ModuleAttrMixin):
             assert B == batch_size
             assert img.shape[2:] == self.key_shape_map[key]
             img = img.reshape(B*T, *img.shape[2:])
-            img = self.key_transform_map[key](img)
             raw_feature = self.key_model_map[key](img)
             feature = self.aggregate_feature(raw_feature)
             assert len(feature.shape) == 2 and feature.shape[0] == B * T
@@ -306,6 +290,5 @@ if __name__=='__main__':
         shape_meta=None,
         model_name='resnet18.a1_in1k',
         pretrained=False,
-        global_pool='',
-        transforms=None
+        global_pool=''
     )

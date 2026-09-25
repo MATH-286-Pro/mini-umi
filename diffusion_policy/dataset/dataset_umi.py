@@ -25,7 +25,6 @@ class UmiDatasetBase(BaseDataset):
         seed: int=42,
         val_ratio: float=0.0,
         max_duration: Optional[float]=None,
-        image_transform=None,
         normalizer_num_workers: int=32
     ):
         self.num_robot = 0
@@ -108,7 +107,6 @@ class UmiDatasetBase(BaseDataset):
         self.sampler = sampler
         self.temporally_independent_normalization = temporally_independent_normalization
         self.threadpool_limits_is_applied = False
-        self.image_transform = image_transform
         self.normalizer_num_workers = normalizer_num_workers
 
     
@@ -127,7 +125,6 @@ class UmiDatasetBase(BaseDataset):
             max_duration=self.max_duration
         )
         val_set.val_mask = ~self.val_mask
-        val_set.image_transform = None
         return val_set
     
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
@@ -204,8 +201,6 @@ class UmiDatasetBase(BaseDataset):
             # T,H,W,C
             # convert uint8 image to float32
             image = torch.from_numpy(np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.)
-            if self.image_transform is not None:
-                image = self.image_transform(image)
             obs_dict[key] = image
             # T,C,H,W
             del data[key]

@@ -185,7 +185,6 @@ class UmiDatasetLeRobot(UmiDatasetBase):
             seed: int=42,
             val_ratio: float=0.0,
             max_duration=None,
-            image_transform=None,
             normalizer_num_workers: int=0,
             video_backend: str="pyav"):
 
@@ -236,6 +235,5 @@ class UmiDatasetLeRobot(UmiDatasetBase):
             seed=seed,
             val_ratio=val_ratio,
             max_duration=max_duration,
-            image_transform=image_transform,
             normalizer_num_workers=normalizer_num_workers,
         )

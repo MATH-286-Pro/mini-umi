@@ -53,8 +53,8 @@ uv run python train.py \
 `UmiDatasetZarr` 与 `UmiDatasetLeRobot` 共同继承存储无关的 `UmiDatasetBase`，复用 UMI 的
 horizon、latency、downsampling、SLERP 和 episode padding
 逻辑。采样之后，它将 absolute SE(3) observation/action 转为 relative trajectory，再转为
-`xyz + rot6d` 并归一化。训练图像增强由 Dataset 对整个 `T,C,H,W` history 一次执行，确保
-同一历史窗口内所有帧使用一致的随机 crop 和 color transform；验证集自动关闭随机增强。
+`xyz + rot6d` 并归一化。两种 Dataset 都返回未增广的图像；训练 policy 在视觉 encoder 前
+统一执行图像增强。
 
 ## 训练
 
@@ -101,7 +101,7 @@ uv run python train.py \
 flowchart LR
     N["网络初始化<br/>Hydra YAML → workspace<br/>policy + observation encoder<br/>U-Net 或 Transformer denoiser<br/>noise scheduler + optimizer"]
     Z["Zarr 切分与预处理<br/>episode 训练集/验证集切分<br/>horizon + latency + downsampling<br/>位姿转换 + normalizer 统计量<br/>DataLoader batch"]
-    A["在线图像增广<br/>RandomCrop + resize<br/>ColorJitter / 其他 transforms<br/>在 observation encoder 内执行"]
+    A["在线图像增广<br/>RandomCrop + resize<br/>ColorJitter / 其他 transforms<br/>在 policy 中、视觉 encoder 前执行"]
     T["Diffusion 训练<br/>编码 observations<br/>向 action trajectory 添加噪声<br/>预测 noise 或 sample target<br/>MSE loss → backward → EMA"]
 
     N -->|已初始化的模块| T
@@ -110,10 +110,10 @@ flowchart LR
     Z -->|低维 observations + actions| T
 ```
 
-Zarr 配置的图像增广属于 model forward，而不是离线转换步骤。LeRobot 配置则在 Dataset
-读取完整 observation history 后调用同一类 Torchvision 增强，并将 encoder 内的 transforms
-设为 `null`，避免重复增强。只有 RGB observations 会经过图像增广；低维 observations 和
-actions 从准备好的 batch 直接进入归一化和 Diffusion 训练。
+Zarr 与 LeRobot Dataset 都只负责读取原始图像并转换为 `[0,1]` 范围的 Tensor。训练 policy
+对每个 batch 样本独立采样增强参数，并让该样本 observation history 中的所有帧共享参数。
+验证和 action prediction 不执行随机增强。只有 RGB observations 会经过图像增广；低维
+observations 和 actions 直接进入归一化和 Diffusion 训练。
 
 不修改 YAML 也可以通过命令行覆盖 Hydra 配置。例如：
 
@@ -203,11 +203,13 @@ dataset.zarr.zip
 
 ### 图像增广在哪里执行
 
-图像增广在 `policy.obs_encoder.transforms` 中配置。例如：
+图像增广在 `policy.image_augmentor` 中配置。例如：
 
 ```yaml
 policy:
-  obs_encoder:
+  image_augmentor:
+    _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor
+    image_shape: [224, 224]
     transforms:
       - type: RandomCrop
         ratio: 0.95
@@ -218,11 +220,9 @@ policy:
         hue: 0.08
 ```
 
-Hydra 会实例化标准 Torchvision transforms。自定义的 `RandomCrop` 项会由 observation encoder 展开为 `RandomCrop(0.95 * image_size)`，然后 resize 回配置的图像尺寸。
+Hydra 会实例化标准 Torchvision transforms。自定义的 `RandomCrop` 项会由 `BatchImageAugmentor` 展开为 `RandomCrop(0.95 * image_size)`，然后 resize 回配置的图像尺寸。
 
-DataLoader batch 进入 policy 后，transforms 会在 `TimmObsEncoder.forward()` 或 `TransformerObsEncoder.forward()` 中、进入 Timm visual backbone 前执行。因此，图像增广不会修改 Zarr 数据集或 cache 中的样本。
-
-当前实现无论 module 处于 training mode 还是 evaluation mode，都会调用 transform pipeline。因此，配置的 random crop、`ColorJitter` 以及其他随机 transforms 也会在验证和 action prediction 时运行。需要确定性评估时，应从 config 中移除随机 transforms，或者修改 encoder，使其仅在 `self.training` 为 true 时执行这些 transforms。
+DataLoader batch 进入 policy 后，增强在视觉 encoder 之前执行。每个 batch 样本独立采样随机参数，同一样本的全部时间帧共享参数。增强只在 `policy.training` 为 true 的 `compute_loss()` 中运行，因此验证与 action prediction 保持确定性，也不会修改 Zarr、LeRobot 数据或 cache 中的样本。
 
 ## 许可证
 

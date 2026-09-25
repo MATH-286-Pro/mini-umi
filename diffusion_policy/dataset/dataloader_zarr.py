@@ -65,7 +65,6 @@ class UmiDatasetZarr(UmiDatasetBase):
             seed: int=42,
             val_ratio: float=0.0,
             max_duration: Optional[float]=None,
-            image_transform=None,
             normalizer_num_workers: int=32):
         replay_buffer = _load_replay_buffer_zarr(dataset_path, cache_dir)
         super().__init__(
@@ -76,6 +75,5 @@ class UmiDatasetZarr(UmiDatasetBase):
             seed=seed,
             val_ratio=val_ratio,
             max_duration=max_duration,
-            image_transform=image_transform,
             normalizer_num_workers=normalizer_num_workers,
         )

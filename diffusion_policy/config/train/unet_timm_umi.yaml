@@ -31,6 +31,18 @@ policy:
     steps_offset: 0
     prediction_type: epsilon # or sample
 
+  image_augmentor:
+    _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor
+    image_shape: [224, 224]
+    transforms:
+      - type: RandomCrop
+        ratio: 0.95
+      - _target_: torchvision.transforms.ColorJitter
+        brightness: 0.3
+        contrast: 0.4
+        saturation: 0.5
+        hue: 0.08
+
   obs_encoder:
     _target_: diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
     shape_meta: ${shape_meta}
@@ -61,36 +73,6 @@ policy:
 
     # it only works for resnet. 32 (7x7) or 16 (14x14)
     downsample_ratio: 32
-
-    transforms:
-      - type: RandomCrop
-        ratio: 0.95
-      # RandomRotation is not compatible with BF16
-      # - _target_: torchvision.transforms.RandomRotation
-      #   degrees:
-      #     - -5.0
-      #     - 5.0
-      #   expand: false
-      - _target_: torchvision.transforms.ColorJitter
-        brightness: 0.3
-        contrast: 0.4
-        saturation: 0.5
-        hue: 0.08
-      # - _target_: torchvision.transforms.RandomPerspective
-      #   distortion_scale: 0.5
-      #   p: 1.0
-      # - _target_: torchvision.transforms.ElasticTransform
-      #   alpha: 50.0
-      #   sigma: 5.0
-      # - _target_: torchvision.transforms.RandomPerspective
-      #   distortion_scale: 0.5
-      #   p: 1.0
-      # - _target_: torchvision.transforms.ElasticTransform
-      #   alpha: 50.0
-      #   sigma: 5.0
-      # - _target_: torchvision.transforms.RandomCrop
-      #   size: 192
-      
 
     use_group_norm: True
     share_rgb_model: False
