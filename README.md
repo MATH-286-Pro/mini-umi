@@ -19,6 +19,42 @@ uv sync
 
 项目使用 CUDA 12.8 索引中的 PyTorch wheel。使用 GPU 训练时，需要安装兼容的 NVIDIA 驱动。
 
+UMI 训练与 LeRobot 转换使用同一个根目录 `uv` 环境。该环境使用 NumPy 2、LeRobot 0.4.3
+以及与其兼容的 Diffusers、Accelerate 和 Hugging Face Hub 版本。数据加载器仍直接读取标准
+Parquet/MP4，避免在训练热路径中依赖 LeRobot 的 Dataset 实现。
+
+## 将 UMI Zarr 转换为 LeRobot v3
+
+转换器保留 Zarr 中的绝对 world/SLAM-frame EEF pose 和 absolute target action。Relative
+trajectory 不写入磁盘，而是在训练窗口采样完成后，以当前 observation pose 为共同参考帧在线生成。
+
+```bash
+uv run python -m scripts.convert_umi_zarr_to_lerobot \
+    /path/to/dataset.zarr.zip \
+    /path/to/umi_lerobot \
+    --repo-id local/umi_abs \
+    --fps 60 \
+    --task "place the cup at the demonstrated target"
+```
+
+输出采用 LeRobot Dataset v3：低维 state/action 写入 Parquet，相机写入 MP4，episode 和
+task 信息写入 `meta/`。额外的 `meta/umi_schema.json` 明确记录原 Zarr key 映射、位姿方向、
+旋转表示和单位。输出目录已存在时转换器会拒绝覆盖；确认要重建时显式传入 `--overwrite`。
+
+使用 LeRobot absolute 数据训练 U-Net Diffusion Policy：
+
+```bash
+uv run python train.py \
+    --config-name=train/unet_timm_umi_lerobot \
+    task.dataset_path=/path/to/umi_lerobot \
+    task.repo_id=local/umi_abs
+```
+
+`UmiDatasetLeRobot` 仍复用 UMI 的 horizon、latency、downsampling、SLERP 和 episode padding
+逻辑。采样之后，它将 absolute SE(3) observation/action 转为 relative trajectory，再转为
+`xyz + rot6d` 并归一化。训练图像增强由 Dataset 对整个 `T,C,H,W` history 一次执行，确保
+同一历史窗口内所有帧使用一致的随机 crop 和 color transform；验证集自动关闭随机增强。
+
 ## 训练
 
 准备处理完成的 UMI Zarr 数据集，然后运行 UMI 训练配置：
@@ -73,7 +109,10 @@ flowchart LR
     Z -->|低维 observations + actions| T
 ```
 
-图像增广属于 model forward，而不是离线 Zarr 转换步骤。只有 RGB observations 会经过图像增广；低维 observations 和 actions 从准备好的 batch 直接进入归一化和 Diffusion 训练。
+Zarr 配置的图像增广属于 model forward，而不是离线转换步骤。LeRobot 配置则在 Dataset
+读取完整 observation history 后调用同一类 Torchvision 增强，并将 encoder 内的 transforms
+设为 `null`，避免重复增强。只有 RGB observations 会经过图像增广；低维 observations 和
+actions 从准备好的 batch 直接进入归一化和 Diffusion 训练。
 
 不修改 YAML 也可以通过命令行覆盖 Hydra 配置。例如：
 
@@ -147,11 +186,11 @@ dataset.zarr.zip
 
 一次训练实际读取哪些 keys，由 task config 中的 `shape_meta` 声明。因此，Zarr keys 必须与 YAML 中的 keys 一致。单个训练样本按以下步骤生成：
 
-1. `UmiDataset` 打开 zip store，并将其复制到内存中的 Zarr store。如果设置了 `cache_dir`，则会创建或复用由文件锁保护的 LMDB cache。
+1. `UmiDatasetZarr` 打开 zip store，并将其复制到内存中的 Zarr store。如果设置了 `cache_dir`，则会创建或复用由文件锁保护的 LMDB cache。
 2. 根据 `val_ratio` 和 `seed`，以 episode 为单位切分训练集和验证集。
 3. `SequenceSampler` 将每个符合条件的时间索引转换为一个样本。对于每个 key，它会应用 YAML 中配置的 `horizon`、`latency_steps` 和 `down_sample_steps`。若 episode 起始位置缺少历史 observation，则使用第一个可用帧向前填充。Action sequence 从当前索引向未来截取，并可在 episode 末尾选择性填充。
 4. 对带有非整数 latency 的低维信号进行插值，其中旋转向量使用球面插值。RGB 数组在样本被请求前一直以压缩形式保留在 Zarr 中。
-5. `UmiDataset.__getitem__` 将 RGB 从 `T,H,W,C` uint8 转换为 `[0,1]` 范围内的 `T,C,H,W` float32。末端执行器 observations/actions 会转换为配置的 pose representation，旋转则输出为 6-D representation。返回的数据结构为：
+5. `UmiDatasetZarr.__getitem__` 将 RGB 从 `T,H,W,C` uint8 转换为 `[0,1]` 范围内的 `T,C,H,W` float32。末端执行器 observations/actions 会转换为配置的 pose representation，旋转则输出为 6-D representation。返回的数据结构为：
 
    ```text
    batch["obs"][observation_key]  # 经 DataLoader 组 batch 后为 B,T,...

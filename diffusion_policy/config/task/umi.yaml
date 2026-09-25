@@ -89,7 +89,7 @@ pose_repr: &pose_repr
   action_pose_repr: relative # abs or rel or delta
 
 dataset:
-  _target_: diffusion_policy.dataset.umi_dataset.UmiDataset
+  _target_: diffusion_policy.dataset.dataloader_zarr.UmiDatasetZarr
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
   cache_dir: null
