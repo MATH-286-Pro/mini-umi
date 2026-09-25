@@ -122,6 +122,5 @@ dataset:
   cache_dir: null
   action_padding: False
   temporally_independent_normalization: False
-  repeat_frame_prob: 0.0
   seed: 42
   val_ratio: 0.05

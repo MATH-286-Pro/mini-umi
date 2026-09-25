@@ -1,6 +1,5 @@
 from typing import Optional
 import numpy as np
-import random
 import scipy.interpolate as si
 import scipy.spatial.transform as st
 from diffusion_policy.dataset.replay_buffer import ReplayBuffer
@@ -29,20 +28,13 @@ class SequenceSampler:
         key_down_sample_steps: dict,
         episode_mask: Optional[np.ndarray]=None,
         action_padding: bool=False,
-        repeat_frame_prob: float=0.0,
         max_duration: Optional[float]=None
     ):
         episode_ends = replay_buffer.episode_ends[:]
 
-        # load gripper_width
-        gripper_width = replay_buffer['robot0_gripper_width'][:, 0]
-        gripper_width_threshold = 0.08
-        self.repeat_frame_prob = repeat_frame_prob
-
         # create indices, including (current_idx, start_idx, end_idx)
         indices = list()
         for i in range(len(episode_ends)):
-            before_first_grasp = True # initialize for each episode
             if episode_mask is not None and not episode_mask[i]:
                 # skip episode
                 continue
@@ -53,9 +45,7 @@ class SequenceSampler:
             for current_idx in range(start_idx, end_idx):
                 if not action_padding and end_idx < current_idx + (key_horizon['action'] - 1) * key_down_sample_steps['action'] + 1:
                     continue
-                if gripper_width[current_idx] < gripper_width_threshold:
-                    before_first_grasp = False
-                indices.append((current_idx, start_idx, end_idx, before_first_grasp))
+                indices.append((current_idx, start_idx, end_idx))
         
         # load low_dim to memory and keep rgb as compressed zarr array
         self.replay_buffer = dict()
@@ -116,7 +106,7 @@ class SequenceSampler:
         return len(self.indices)
     
     def sample_sequence(self, idx):
-        current_idx, start_idx, end_idx, before_first_grasp = self.indices[idx]
+        current_idx, start_idx, end_idx = self.indices[idx]
 
         result = dict()
 
@@ -175,12 +165,6 @@ class SequenceSampler:
                     output = interp(idx_with_latency)
                 
             result[key] = output
-
-        # repeat frame before first grasp
-        if self.repeat_frame_prob != 0.0:
-            if before_first_grasp and random.random() < self.repeat_frame_prob:
-                for key in obs_keys:
-                    result[key][:-1] = result[key][-1:]
 
         # aciton
         input_arr = self.replay_buffer['action']
