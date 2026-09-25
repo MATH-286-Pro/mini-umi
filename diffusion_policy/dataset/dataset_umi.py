@@ -22,7 +22,6 @@ class UmiDatasetBase(BaseDataset):
         replay_buffer: ReplayBuffer,
         action_padding: bool=False,
         temporally_independent_normalization: bool=False,
-        repeat_frame_prob: float=0.0,
         seed: int=42,
         val_ratio: float=0.0,
         max_duration: Optional[float]=None,
@@ -94,7 +93,6 @@ class UmiDatasetBase(BaseDataset):
             key_down_sample_steps=key_down_sample_steps,
             episode_mask=train_mask,
             action_padding=action_padding,
-            repeat_frame_prob=repeat_frame_prob,
             max_duration=max_duration
         )
         self.shape_meta = shape_meta
@@ -106,7 +104,6 @@ class UmiDatasetBase(BaseDataset):
         self.key_down_sample_steps = key_down_sample_steps
         self.val_mask = val_mask
         self.action_padding = action_padding
-        self.repeat_frame_prob = repeat_frame_prob
         self.max_duration = max_duration
         self.sampler = sampler
         self.temporally_independent_normalization = temporally_independent_normalization
@@ -127,7 +124,6 @@ class UmiDatasetBase(BaseDataset):
             key_down_sample_steps=self.key_down_sample_steps,
             episode_mask=self.val_mask,
             action_padding=self.action_padding,
-            repeat_frame_prob=self.repeat_frame_prob,
             max_duration=self.max_duration
         )
         val_set.val_mask = ~self.val_mask
