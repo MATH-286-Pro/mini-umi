@@ -6,16 +6,16 @@ import numpy as np
 import pandas as pd
 
 from diffusion_policy.dataset.replay_buffer import ReplayBuffer
-from diffusion_policy.dataset.dataloader_zarr import UmiDatasetZarr
+from diffusion_policy.dataset.dataset_umi import UmiDatasetBase
 
 
 class _LeRobotVideoArray:
     """Expose a LeRobot video feature through the slice API used by SequenceSampler."""
 
-    def __init__(self, root: Path, info: dict, episodes: pd.DataFrame,
+    def __init__(self, root: Path, layout, episodes: pd.DataFrame,
             episode_ends: np.ndarray, feature_key: str, shape: tuple):
         self.root = root
-        self.info = info
+        self.layout = layout
         self.episodes = episodes
         self.episode_ends = episode_ends
         self.feature_key = feature_key
@@ -42,12 +42,10 @@ class _LeRobotVideoArray:
         episode_index = int(np.searchsorted(self.episode_ends, index, side="right"))
         episode_start = 0 if episode_index == 0 else int(self.episode_ends[episode_index - 1])
         episode = self.episodes.iloc[episode_index]
-        timestamp = float(episode[f"videos/{self.feature_key}/from_timestamp"])
-        timestamp += (index - episode_start) / float(self.info["fps"])
-        video_path = self.info["video_path"].format(
-            video_key=self.feature_key,
-            chunk_index=int(episode[f"videos/{self.feature_key}/chunk_index"]),
-            file_index=int(episode[f"videos/{self.feature_key}/file_index"]),
+        video_path, timestamp = self.layout.locate_video_frame(
+            episode=episode,
+            feature_key=self.feature_key,
+            frame_index=index - episode_start,
         )
         return _decode_video_frame(self.root / video_path, timestamp)
 
@@ -77,6 +75,67 @@ def _read_parquet_tree(path: Path) -> pd.DataFrame:
     if not files:
         raise FileNotFoundError(f"No Parquet files found under {path}")
     return pd.concat((pd.read_parquet(file) for file in files), ignore_index=True)
+
+
+def _read_jsonlines(path: Path) -> pd.DataFrame:
+    with path.open() as file:
+        records = [json.loads(line) for line in file if line.strip()]
+    if not records:
+        raise ValueError(f"No records found in {path}")
+    return pd.DataFrame.from_records(records)
+
+
+class _LeRobotLayoutV21:
+    def __init__(self, info: dict):
+        self.info = info
+
+    def load_episodes(self, dataset_path: Path) -> pd.DataFrame:
+        return _read_jsonlines(dataset_path / "meta" / "episodes.jsonl")
+
+    def locate_video_frame(self, episode: pd.Series, feature_key: str,
+            frame_index: int) -> tuple[str, float]:
+        episode_index = int(episode["episode_index"])
+        video_path = self.info["video_path"].format(
+            video_key=feature_key,
+            episode_chunk=episode_index // 1000,
+            episode_index=episode_index,
+        )
+        return video_path, frame_index / float(self.info["fps"])
+
+
+class _LeRobotLayoutV30:
+    def __init__(self, info: dict):
+        self.info = info
+
+    def load_episodes(self, dataset_path: Path) -> pd.DataFrame:
+        return _read_parquet_tree(dataset_path / "meta" / "episodes")
+
+    def locate_video_frame(self, episode: pd.Series, feature_key: str,
+            frame_index: int) -> tuple[str, float]:
+        video_path = self.info["video_path"].format(
+            video_key=feature_key,
+            chunk_index=int(episode[f"videos/{feature_key}/chunk_index"]),
+            file_index=int(episode[f"videos/{feature_key}/file_index"]),
+        )
+        timestamp = float(episode[f"videos/{feature_key}/from_timestamp"])
+        timestamp += frame_index / float(self.info["fps"])
+        return video_path, timestamp
+
+
+def _make_lerobot_layout(info: dict):
+    version = info.get("codebase_version")
+    layouts = {
+        "v2.1": _LeRobotLayoutV21,
+        "v3.0": _LeRobotLayoutV30,
+    }
+    try:
+        layout_class = layouts[version]
+    except KeyError as error:
+        supported = ", ".join(sorted(layouts))
+        raise ValueError(
+            f"Unsupported LeRobot dataset version {version!r}; expected one of: {supported}"
+        ) from error
+    return layout_class(info=info)
 
 
 def _column_to_numpy(frames: pd.DataFrame, info: dict, feature_key: str) -> np.ndarray:
@@ -110,29 +169,39 @@ def _load_schema(dataset_path: Path, info: dict) -> dict:
     }
 
 
-class UmiDatasetLeRobot(UmiDatasetZarr):
-    """Train UMI policies from absolute-pose LeRobot v3 datasets.
+class UmiDatasetLeRobot(UmiDatasetBase):
+    """Train UMI policies from absolute-pose LeRobot v2.1 or v3.0 datasets.
 
     LeRobot remains the storage layer. This adapter reconstructs the legacy
     ReplayBuffer interface so the existing timestamp interpolation, horizon
     sampling, SE(3) relative conversion, and normalization stay identical.
     """
 
-    def __init__(self, shape_meta: dict, dataset_path: str, repo_id: str,
-            cache_dir=None, pose_repr: dict={}, action_padding: bool=False,
+    def __init__(self,
+            shape_meta: dict,
+            dataset_path: str,
+            cache_dir=None,
+            pose_repr: dict={},
+            action_padding: bool=False,
             temporally_independent_normalization: bool=False,
-            repeat_frame_prob: float=0.0, seed: int=42,
-            val_ratio: float=0.0, max_duration=None, image_transform=None,
+            repeat_frame_prob: float=0.0,
+            seed: int=42,
+            val_ratio: float=0.0,
+            max_duration=None,
+            image_transform=None,
             normalizer_num_workers: int=0,
             video_backend: str="pyav"):
+
         if cache_dir is not None:
-            raise ValueError("cache_dir is only supported by UmiDatasetZarr")
+            raise ValueError("cache_dir is not supported by UmiDatasetLeRobot")
         if video_backend != "pyav":
             raise ValueError("The lightweight LeRobot loader currently supports video_backend='pyav' only")
+
         dataset_path = Path(dataset_path).expanduser().resolve()
         with (dataset_path / "meta" / "info.json").open() as file:
             info = json.load(file)
-        episodes = _read_parquet_tree(dataset_path / "meta" / "episodes")
+        layout = _make_lerobot_layout(info=info)
+        episodes = layout.load_episodes(dataset_path=dataset_path)
         episodes = episodes.sort_values("episode_index").reset_index(drop=True)
         episode_ends = episodes["length"].to_numpy(dtype=np.int64).cumsum()
         frames = _read_parquet_tree(dataset_path / "data")
@@ -153,17 +222,25 @@ class UmiDatasetLeRobot(UmiDatasetZarr):
         for raw_key, feature_key in schema["video_features"].items():
             feature_shape = tuple(info["features"][feature_key]["shape"])
             data[raw_key] = _LeRobotVideoArray(
-                dataset_path, info, episodes, episode_ends, feature_key, feature_shape)
+                root=dataset_path,
+                layout=layout,
+                episodes=episodes,
+                episode_ends=episode_ends,
+                feature_key=feature_key,
+                shape=feature_shape,
+            )
 
         replay_buffer = ReplayBuffer({
             "data": data,
             "meta": {"episode_ends": episode_ends},
         })
+        
         self.lerobot_info = info
         self.lerobot_schema = schema
+
         super().__init__(
             shape_meta=shape_meta,
-            dataset_path=str(dataset_path),
+            replay_buffer=replay_buffer,
             pose_repr=pose_repr,
             action_padding=action_padding,
             temporally_independent_normalization=temporally_independent_normalization,
@@ -173,5 +250,4 @@ class UmiDatasetLeRobot(UmiDatasetZarr):
             max_duration=max_duration,
             image_transform=image_transform,
             normalizer_num_workers=normalizer_num_workers,
-            replay_buffer=replay_buffer,
         )
