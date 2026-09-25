@@ -4,13 +4,11 @@ defaults:
 
 name: umi_lerobot
 dataset_path: data/umi_lerobot
-repo_id: local/umi_abs
 
 dataset:
   _target_: diffusion_policy.dataset.dataloader_lerobot.UmiDatasetLeRobot
   shape_meta: ${task.shape_meta}
   dataset_path: ${task.dataset_path}
-  repo_id: ${task.repo_id}
   pose_repr: ${task.pose_repr}
   action_padding: false
   temporally_independent_normalization: false
