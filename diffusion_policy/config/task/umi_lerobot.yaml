@@ -16,14 +16,3 @@ dataset:
   seed: 42
   val_ratio: 0.05
   video_backend: pyav
-  image_transform:
-    _target_: diffusion_policy.dataset.image_augmentation.SequenceImageAugmentor
-    image_shape: [224, 224]
-    transforms:
-      - type: RandomCrop
-        ratio: 0.95
-      - _target_: torchvision.transforms.ColorJitter
-        brightness: 0.3
-        contrast: 0.4
-        saturation: 0.5
-        hue: 0.08

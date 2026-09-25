@@ -5,7 +5,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
 import logging
 
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
@@ -55,7 +54,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
             shape_meta: dict,
             model_name: str='vit_base_patch16_clip_224.openai',
             global_pool: str='',
-            transforms: list=None,
             n_emb: int=768,
             pretrained: bool=False,
             frozen: bool=False,
@@ -75,7 +73,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
         rgb_keys = list()
         low_dim_keys = list()
         key_model_map = nn.ModuleDict()
-        key_transform_map = nn.ModuleDict()
         key_projection_map = nn.ModuleDict()
         key_shape_map = dict()
 
@@ -160,15 +157,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
             if type == 'rgb':
                 assert image_shape is None or image_shape == shape[1:]
                 image_shape = shape[1:]
-        if transforms is not None and not isinstance(transforms[0], torch.nn.Module):
-            assert transforms[0].type == 'RandomCrop'
-            ratio = transforms[0].ratio
-            transforms = [
-                torchvision.transforms.RandomCrop(size=int(image_shape[0] * ratio)),
-                torchvision.transforms.Resize(size=image_shape[0], antialias=True)
-            ] + transforms[1:]
-        transform = nn.Identity() if transforms is None else torch.nn.Sequential(*transforms)
-
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
             type = attr.get('type', 'low_dim')
@@ -191,8 +179,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
                     proj = nn.Linear(in_features=feature_size, out_features=n_emb)
                 key_projection_map[key] = proj
 
-                this_transform = transform
-                key_transform_map[key] = this_transform
             elif type == 'low_dim':
                 dim = np.prod(shape)
                 proj = nn.Identity()
@@ -212,7 +198,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
         self.n_emb = n_emb
         self.shape_meta = shape_meta
         self.key_model_map = key_model_map
-        self.key_transform_map = key_transform_map
         self.key_projection_map = key_projection_map
         self.share_rgb_model = share_rgb_model
         self.rgb_keys = rgb_keys
@@ -267,7 +252,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
             assert B == batch_size
             assert img.shape[2:] == self.key_shape_map[key]
             img = img.reshape(B*T, *img.shape[2:])
-            img = self.key_transform_map[key](img)
             raw_feature = self.key_model_map[key](img)
             feature = self.aggregate_feature(raw_feature)
             emb = self.key_projection_map[key](feature)
