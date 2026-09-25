@@ -55,6 +55,8 @@ uv run python train.py \
 `xyz + rot6d` 并归一化。训练图像增强由 Dataset 对整个 `T,C,H,W` history 一次执行，确保
 同一历史窗口内所有帧使用一致的随机 crop 和 color transform；验证集自动关闭随机增强。
 
+GR00T 的字段映射和配置见 [共享数据说明](docs/lerobot_gr00t.md)。
+
 ## 训练
 
 准备处理完成的 UMI Zarr 数据集，然后运行 UMI 训练配置：
