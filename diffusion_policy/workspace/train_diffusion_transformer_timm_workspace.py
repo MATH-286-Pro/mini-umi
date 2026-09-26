@@ -49,8 +49,12 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
         self.model = hydra.utils.instantiate(cfg.policy)
 
         self.ema_model: DiffusionTransformerTimmPolicy = None
+        self.ema_updater: EMAModel = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
+            self.ema_updater = hydra.utils.instantiate(
+                cfg.ema,
+                model=self.ema_model)
 
         # configure training state
         self.optimizer = self.model.get_optimizer(**cfg.optimizer)
@@ -65,7 +69,11 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
     def run(self):
         cfg = copy.deepcopy(self.cfg)
         
+        # hugging face 训练加速库
+        # 方便多 GPU 训练
         accelerator = Accelerator(log_with='wandb')
+
+        # wandb 配置
         wandb_cfg = OmegaConf.to_container(cfg.logging, resolve=True)
         wandb_cfg.pop('project')
         accelerator.init_trackers(
@@ -74,14 +82,14 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
             init_kwargs={"wandb": wandb_cfg}
         )
 
-        # resume training
+        # 恢复训练 resume training
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
 
-        # configure dataset
+        # 训练数据集 train dataset configuration
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset) or isinstance(dataset, BaseDataset)
@@ -97,7 +105,7 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
         accelerator.wait_for_everyone()
         normalizer = pickle.load(open(normalizer_path, 'rb'))
 
-        # configure validation dataset
+        # 验证数据集 val dataset configuration
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
@@ -118,37 +126,11 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
             last_epoch=self.global_step-1
         )
 
-        # configure ema
-        ema: EMAModel = None
-        if cfg.training.use_ema:
-            ema = hydra.utils.instantiate(
-                cfg.ema,
-                model=self.ema_model)
-
-        # # configure logging
-        # wandb_run = wandb.init(
-        #     dir=str(self.output_dir),
-        #     config=OmegaConf.to_container(cfg, resolve=True),
-        #     **cfg.logging
-        # )
-        # wandb.config.update(
-        #     {
-        #         "output_dir": self.output_dir,
-        #     }
-        # )
-
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
             **cfg.checkpoint.topk
         )
-
-        # device transfer
-        # device = torch.device(cfg.training.device)
-        # self.model.to(device)
-        # if self.ema_model is not None:
-        #     self.ema_model.to(device)
-        # optimizer_to(self.optimizer, device)
 
         # accelerator
         train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = accelerator.prepare(
@@ -207,7 +189,7 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
                         
                         # update ema
                         if cfg.training.use_ema:
-                            ema.step(accelerator.unwrap_model(self.model))
+                            self.ema_updater.step(accelerator.unwrap_model(self.model))
 
                         # logging
                         raw_loss_cpu = raw_loss.item()
@@ -242,6 +224,7 @@ class TrainDiffusionTransformerTimmWorkspace(BaseWorkspace):
                     policy = self.ema_model
                 policy.eval()
 
+                # 使用与 valization dataset 中 action 的差作为评估标准
                 # run validation
                 # if (self.epoch % cfg.training.val_every) == 0 and len(val_dataloader) > 0 and accelerator.is_main_process:
                 #     with torch.no_grad():
