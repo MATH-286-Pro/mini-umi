@@ -49,12 +49,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         self.model: BaseImagePolicy = hydra.utils.instantiate(cfg.policy)
 
         self.ema_model: BaseImagePolicy = None
+        self.ema_updater: EMAModel = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
-
-        # configure training state
-        # self.optimizer = hydra.utils.instantiate(
-        #     cfg.optimizer, params=self.model.parameters())
+            self.ema_updater = hydra.utils.instantiate(
+                cfg.ema,
+                model=self.ema_model)
 
         obs_encorder_lr = cfg.optimizer.lr
         if cfg.policy.obs_encoder.pretrained:
@@ -69,8 +69,8 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             {'params': self.model.model.parameters()},
             {'params': obs_encorder_params, 'lr': obs_encorder_lr}
         ]
-        # self.optimizer = hydra.utils.instantiate(
-        #     cfg.optimizer, params=param_groups)
+
+
         optimizer_cfg = OmegaConf.to_container(cfg.optimizer, resolve=True)
         optimizer_cfg.pop('_target_')
         self.optimizer = torch.optim.AdamW(
@@ -89,7 +89,11 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
     def run(self):
         cfg = copy.deepcopy(self.cfg)
 
+        # hugging face 训练加速库
+        # 方便多 GPU 训练
         accelerator = Accelerator(log_with='wandb')
+
+        # wandb 配置
         wandb_cfg = OmegaConf.to_container(cfg.logging, resolve=True)
         wandb_cfg.pop('project')
         accelerator.init_trackers(
@@ -98,18 +102,25 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             init_kwargs={"wandb": wandb_cfg}
         )
 
-        # resume training
+        # 恢复训练 resume training
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 accelerator.print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
 
-        # configure dataset
+        # 训练数据集 train dataset configuration
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset) or isinstance(dataset, BaseDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
+
+        # 验证数据集 val dataset configuration
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+        print('train dataset:', len(dataset), 'train dataloader:', len(train_dataloader))
+        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
+
 
         # compute normalizer on the main process and save to disk
         normalizer_path = os.path.join(self.output_dir, 'normalizer.pkl')
@@ -120,12 +131,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # load normalizer on all processes
         accelerator.wait_for_everyone()
         normalizer = pickle.load(open(normalizer_path, 'rb'))
-
-        # configure validation dataset
-        val_dataset = dataset.get_validation_dataset()
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-        print('train dataset:', len(dataset), 'train dataloader:', len(train_dataloader))
-        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
 
         self.model.set_normalizer(normalizer)
         if cfg.training.use_ema:
@@ -144,42 +149,21 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             last_epoch=self.global_step-1
         )
 
-        # configure ema
-        ema: EMAModel = None
-        if cfg.training.use_ema:
-            ema = hydra.utils.instantiate(
-                cfg.ema,
-                model=self.ema_model)
-
-        # # configure logging
-        # wandb_run = wandb.init(
-        #     dir=str(self.output_dir),
-        #     config=OmegaConf.to_container(cfg, resolve=True),
-        #     **cfg.logging
-        # )
-        # wandb.config.update(
-        #     {
-        #         "output_dir": self.output_dir,
-        #     }
-        # )
-
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
             **cfg.checkpoint.topk
         )
 
-        # device transfer
-        # device = torch.device(cfg.training.device)
-        # self.model.to(device)
-        # if self.ema_model is not None:
-        #     self.ema_model.to(device)
-        # optimizer_to(self.optimizer, device)
-
         # accelerator
         train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = accelerator.prepare(
-            train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler
+            train_dataloader, 
+            val_dataloader, 
+            self.model, 
+            self.optimizer, 
+            lr_scheduler
         )
+        
         device = self.model.device
         if self.ema_model is not None:
             self.ema_model.to(device)
@@ -230,7 +214,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         
                         # update ema
                         if cfg.training.use_ema:
-                            ema.step(accelerator.unwrap_model(self.model))
+                            self.ema_updater.step(accelerator.unwrap_model(self.model))
 
                         # logging
                         raw_loss_cpu = raw_loss.item()
@@ -265,24 +249,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     policy = self.ema_model
                 policy.eval()
 
-                # run validation
-                # if (self.epoch % cfg.training.val_every) == 0 and len(val_dataloader) > 0 and accelerator.is_main_process:
-                #     with torch.no_grad():
-                #         val_losses = list()
-                #         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
-                #                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
-                #             for batch_idx, batch in enumerate(tepoch):
-                #                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                #                 loss = self.model(batch)
-                #                 val_losses.append(loss)
-                #                 if (cfg.training.max_val_steps is not None) \
-                #                     and batch_idx >= (cfg.training.max_val_steps-1):
-                #                     break
-                #         if len(val_losses) > 0:
-                #             val_loss = torch.mean(torch.tensor(val_losses)).item()
-                #             # log epoch average validation loss
-                #             step_log['val_loss'] = val_loss
-                
+                # 使用与 valization dataset 中 action 的差作为评估标准
                 def log_action_mse(step_log, category, pred_action, gt_action):
                     B, T, _ = pred_action.shape
                     pred_action = pred_action.view(B, T, -1, 10)
@@ -291,6 +258,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     step_log[f'{category}_action_mse_error_pos'] = torch.nn.functional.mse_loss(pred_action[..., :3], gt_action[..., :3])
                     step_log[f'{category}_action_mse_error_rot'] = torch.nn.functional.mse_loss(pred_action[..., 3:9], gt_action[..., 3:9])
                     step_log[f'{category}_action_mse_error_width'] = torch.nn.functional.mse_loss(pred_action[..., 9], gt_action[..., 9])
+
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0 and accelerator.is_main_process:
                     with torch.no_grad():
@@ -337,6 +305,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
                     # recover the DDP model
                     self.model = model_ddp
+
                 # ========= eval end for this epoch ==========
                 # end of epoch
                 # log of last step is combined with validation and rollout
