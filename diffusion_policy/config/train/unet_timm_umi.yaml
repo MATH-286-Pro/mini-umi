@@ -1,94 +1,15 @@
 # @package _global_
 
 defaults:
-  - _self_
   - /task: umi
-
-name: train_diffusion_unet_timm
-_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+  - /dataset: zarr  # zarr / lerobot
+  - /augmentation: crop_color
+  - /network: unet_timm
+  - _self_
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-exp_name: "default"
-
-n_action_steps: 8
-
-policy:
-  _target_: diffusion_policy.policy.diffusion_unet_timm_policy.DiffusionUnetTimmPolicy
-
-  shape_meta: ${shape_meta}
-  
-  noise_scheduler:
-    _target_: diffusers.DDIMScheduler
-    num_train_timesteps: 50
-    beta_start: 0.0001
-    beta_end: 0.02
-    # beta_schedule is important
-    # this is the best we found
-    beta_schedule: squaredcos_cap_v2
-    clip_sample: True
-    set_alpha_to_one: True
-    steps_offset: 0
-    prediction_type: epsilon # or sample
-
-  image_augmentor:
-    _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor
-    image_shape: [224, 224]
-    transforms:
-      - type: RandomCrop
-        ratio: 0.95
-      - _target_: torchvision.transforms.ColorJitter
-        brightness: 0.3
-        contrast: 0.4
-        saturation: 0.5
-        hue: 0.08
-
-  obs_encoder:
-    _target_: diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
-    shape_meta: ${shape_meta}
-
-    ##### from scratch #####
-    # model_name: 'vit_base_patch16_224'
-    # model_name: 'resnet34'
-    # model_name: 'vit_tiny_patch16_224'
-    # model_name: 'efficientnet_b0'
-    # model_name: 'efficientnet_b3'
-    # pretrained: False
-    # frozen: False
-
-    ##### from scratch #####
-    # model_name: 'resnet34.a1_in1k'
-    model_name: 'vit_base_patch16_clip_224.openai'
-    # model_name: 'convnext_base.clip_laion2b_augreg_ft_in12k'
-    pretrained: True
-    frozen: False
-
-    
-    global_pool: ''
-
-    # 'avg' or 'max' or 'soft_attention' or 'spatial_embedding' or 'transformer' or 'attention_pool_2d'
-    feature_aggregation: 'attention_pool_2d'
-    # feature_aggregation: null
-    position_encording: 'sinusoidal' # 'learnable' or 'sinusoidal'. it only works for transformer
-
-    # it only works for resnet. 32 (7x7) or 16 (14x14)
-    downsample_ratio: 32
-
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: True
-
-  num_inference_steps: 16
-  obs_as_global_cond: True
-  diffusion_step_embed_dim: 128
-  down_dims: [256,512,1024]
-  kernel_size: 5
-  n_groups: 8
-  cond_predict_scale: True
-  input_pertub: 0.1 # reference: https://github.com/forever208/DDPM-IP
-  # train multiple diffusion steps per obs encoder forward pass
-  # doing this too much will cause instability!
-  train_diffusion_n_samples: 1
+exp_name: default
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -101,66 +22,38 @@ ema:
 dataloader:
   batch_size: 64
   num_workers: 8
-  shuffle: True
-  pin_memory: True
-  persistent_workers: True
+  shuffle: true
+  pin_memory: true
+  persistent_workers: true
 
 val_dataloader:
   batch_size: 64
   num_workers: 8
-  shuffle: False
-  pin_memory: True
-  persistent_workers: True
-
-# dataloader:
-#   batch_size: 64
-#   num_workers: 16
-#   shuffle: True
-#   pin_memory: True
-#   persistent_workers: True
-
-# val_dataloader:
-#   batch_size: 64
-#   num_workers: 16
-#   shuffle: False
-#   pin_memory: True
-#   persistent_workers: True
-
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 3.0e-4
-  betas: [0.95, 0.999]
-  eps: 1.0e-8
-  weight_decay: 1.0e-6
+  shuffle: false
+  pin_memory: true
+  persistent_workers: true
 
 training:
-  device: "cuda:0"
+  device: cuda:0
   seed: 42
-  debug: False
-  resume: False
-  # optimization
+  debug: false
+  resume: false
   lr_scheduler: cosine
   lr_warmup_steps: 2000
   num_epochs: 120
   gradient_accumulate_every: 1
-  # EMA destroys performance when used with BatchNorm
-  # replace BatchNorm with GroupNorm.
-  use_ema: True
-  freeze_encoder: False
-  # training loop control
-  # in epochs
+  use_ema: true
+  freeze_encoder: false
   checkpoint_every: 10
   val_every: 1
   sample_every: 5
-  # steps per epoch
   max_train_steps: null
   max_val_steps: null
-  # misc
   tqdm_interval_sec: 1.0
 
 logging:
   project: umi
-  resume: False
+  resume: false
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
@@ -173,7 +66,7 @@ checkpoint:
     mode: min
     k: 20
     format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
-  save_last_ckpt: True
+  save_last_ckpt: true
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}

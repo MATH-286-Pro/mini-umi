@@ -111,7 +111,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
         # 训练数据集 train dataset configuration
         dataset: BaseImageDataset
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
+        dataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseImageDataset) or isinstance(dataset, BaseDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
 

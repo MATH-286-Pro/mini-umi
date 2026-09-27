@@ -1,0 +1,54 @@
+# @package _global_
+
+name: train_diffusion_unet_timm
+network_name: unet_timm
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+
+n_action_steps: 8
+
+policy:
+  _target_: diffusion_policy.policy.diffusion_unet_timm_policy.DiffusionUnetTimmPolicy
+  shape_meta: ${shape_meta}
+  image_augmentor: ${augmentation.image_augmentor}
+
+  noise_scheduler:
+    _target_: diffusers.DDIMScheduler
+    num_train_timesteps: 50
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: true
+    set_alpha_to_one: true
+    steps_offset: 0
+    prediction_type: epsilon
+
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
+    shape_meta: ${shape_meta}
+    model_name: vit_base_patch16_clip_224.openai
+    pretrained: true
+    frozen: false
+    global_pool: ''
+    feature_aggregation: attention_pool_2d
+    position_encording: sinusoidal
+    downsample_ratio: 32
+    use_group_norm: true
+    share_rgb_model: false
+    imagenet_norm: true
+
+  num_inference_steps: 16
+  obs_as_global_cond: true
+  diffusion_step_embed_dim: 128
+  down_dims: [256, 512, 1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: true
+  input_pertub: 0.1
+  train_diffusion_n_samples: 1
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 3.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6

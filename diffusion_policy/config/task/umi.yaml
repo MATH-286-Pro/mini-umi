@@ -81,16 +81,3 @@ shape_meta: &shape_meta
     latency_steps: 0 # float
     down_sample_steps: ${task.obs_down_sample_steps} # int
     rotation_rep: rotation_6d
-
-task_name: &task_name umi
-dataset_path: example_demo_session/dataset.zarr.zip
-dataset:
-  _target_: diffusion_policy.dataset.dataloader_zarr.UmiDatasetZarr
-  shape_meta: *shape_meta
-  dataset_path: ${task.dataset_path}
-  cache_dir: null
-  action_padding: False
-  temporally_independent_normalization: False
-  max_duration: null
-  seed: 42
-  val_ratio: 0.05

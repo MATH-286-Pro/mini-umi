@@ -1,14 +1,12 @@
-defaults:
-  - umi
-  - _self_
+# @package _global_
 
-name: umi_lerobot
-dataset_path: data/umi_lerobot
+dataset_name: lerobot
 
 dataset:
   _target_: diffusion_policy.dataset.dataloader_lerobot.UmiDatasetLeRobot
   shape_meta: ${task.shape_meta}
-  dataset_path: ${task.dataset_path}
+  dataset_path: data/umi_lerobot
+  cache_dir: null
   action_padding: false
   temporally_independent_normalization: false
   max_duration: null
