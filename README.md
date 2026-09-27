@@ -58,6 +58,33 @@ uv run python train.py \
 latency、downsampling、SLERP 和 episode padding。采样后将绝对位姿转换为相对轨迹和
 rotation-6D。完整的 GR00T 配置、统计生成步骤和 v3 限制见 [共享数据说明](docs/lerobot_gr00t.md)。
 
+## 导出 ONNX policy
+
+从 checkpoint 导出：
+
+```bash
+uv run python -m tool.onnx_policy.export_policy \
+    /path/to/latest.ckpt \
+    /path/to/policy.onnx \
+    --num-inference-steps 16
+```
+
+输出只有一个 `policy.onnx`，其中包含 observation encoder、固定步数的 DDIM 去噪循环、
+action 反归一化和运行所需元数据。默认优先导出 checkpoint 中的 EMA 权重；可用
+`--weights model` 明确选择非 EMA 权重。`--num-inference-steps` 在导出时固化；省略时使用
+checkpoint 的配置值。若要更改步数，需要重新导出。
+
+ONNX 通常约为 checkpoint 的一半大小：训练 checkpoint 同时保存 `model` 和
+`ema_model` 两套权重，而导出时只保留选中的一套推理权重。ONNX 仍使用 FP32，体积减小
+不代表精度被压缩；固定步数的 `Loop` 也会复用同一套 denoiser 权重。
+
+```python
+from tool.onnx_policy import OnnxPolicy
+
+policy = OnnxPolicy("/path/to/policy.onnx")
+result = policy.predict_action(observations, seed=0)
+```
+
 ## 训练
 
 准备处理完成的 UMI Zarr 数据集，然后运行 UMI 训练配置：
