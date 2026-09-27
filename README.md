@@ -23,40 +23,41 @@ UMI 训练与 LeRobot 转换使用同一个根目录 `uv` 环境。该环境使�
 以及与其兼容的 Diffusers、Accelerate 和 Hugging Face Hub 版本。数据加载器仍直接读取标准
 Parquet/MP4，避免在训练热路径中依赖 LeRobot 的 Dataset 实现。
 
-## 将 UMI Zarr 转换为 LeRobot v3
+## 将 UMI Zarr 转换为 LeRobot
 
-转换器默认保留绝对 world/SLAM-frame 机器人状态，并写入带来源标记的零值占位 action。
-训练时从未来状态生成 action，再在线转换为相对轨迹。`--action-source stored` 保留旧的导出模式。
+默认保留绝对 world/SLAM-frame 机器人状态，并写入带来源标记的零值占位 action。
+训练时从所选机器人的未来状态生成 action，复用 Zarr 无 action 时的处理流程。
+
+当前本地 GR00T 使用 v2.1，可导出一份供 UMI 与 GR00T 共用的数据：
 
 ```bash
-uv run python -m scripts.convert_umi_zarr_to_lerobot_v3 \
-    /path/to/dataset.zarr.zip \
-    /path/to/umi_lerobot \
-    --repo-id local/umi_abs \
-    --fps 60 \
-    --task "place the cup at the demonstrated target"
+uv run python -m scripts.convert_umi_zarr_to_lerobot_v21 \
+    /path/to/dataset.zarr.zip /path/to/umi_lerobot_v21 \
+    --repo-id local/umi_state_v21 --fps 60 \
+    --action-source state --task "place the cup at the demonstrated target"
 ```
 
-输出采用 LeRobot Dataset v3：低维 state/action 写入 Parquet，相机写入 MP4，episode 和
-task 信息写入 `meta/`。额外的 `meta/umi_schema.json` 明确记录原 Zarr key 映射、位姿方向、
-旋转表示和单位。输出目录已存在时转换器会拒绝覆盖；确认要重建时显式传入 `--overwrite`。
+v3 使用 `scripts.convert_umi_zarr_to_lerobot_v3` 入口和独立输出目录。
+导出生成 `meta/modality.json` 和 `meta/gr00t_config.py`，让 GR00T 根据具名状态列
+读取位姿/夹爪目标及统计，而不读取占位 action。原始位置、轴角字段也保留，UMI 继续
+使用自己的 YAML 配置选择 obs 和 action 机器人及维度。
 
-使用 LeRobot v2.1 或 v3 absolute 数据训练 U-Net Diffusion Policy；loader 会根据
-`meta/info.json` 中的 `codebase_version` 自动选择存储布局：
+`--action-source stored` 保留原先的 absolute action 导出模式：如果 Zarr 已有控制命令
+则保留，否则从状态拼接。默认 state 模式有意使用未来状态作为监督，不保留原 action
+的命令语义。旧数据仍按原来的已存 action 路径读取。
+
+使用 LeRobot v2.1 或 v3 数据训练 UMI：
 
 ```bash
 uv run python train.py \
-    --config-name=train/unet_timm_umi_lerobot \
-    task.dataset_path=/path/to/umi_lerobot
+    --config-name=train/unet_timm_umi \
+    dataset=lerobot \
+    dataset.dataset_path=/path/to/umi_lerobot_v21
 ```
 
-`UmiDatasetZarr` 与 `UmiDatasetLeRobot` 共同继承存储无关的 `UmiDatasetBase`，复用 UMI 的
-horizon、latency、downsampling、SLERP 和 episode padding
-逻辑。采样之后，它将 absolute SE(3) observation/action 转为 relative trajectory，再转为
-`xyz + rot6d` 并归一化。两种 Dataset 都返回未增广的图像；训练 policy 在视觉 encoder 前
-统一执行图像增强。
-
-GR00T 的字段映射和配置见 [共享数据说明](docs/lerobot_gr00t.md)。
+`UmiDatasetZarr` 与 `UmiDatasetLeRobot` 共同继承 `UmiDatasetBase`，复用 horizon、
+latency、downsampling、SLERP 和 episode padding。采样后将绝对位姿转换为相对轨迹和
+rotation-6D。完整的 GR00T 配置、统计生成步骤和 v3 限制见 [共享数据说明](docs/lerobot_gr00t.md)。
 
 ## 训练
 
@@ -65,7 +66,7 @@ GR00T 的字段映射和配置见 [共享数据说明](docs/lerobot_gr00t.md)。
 ```bash
 uv run python train.py \
     --config-name=train/unet_timm_umi \
-    task.dataset_path=/path/to/dataset.zarr.zip
+    dataset.dataset_path=/path/to/dataset.zarr.zip
 ```
 
 使用多张 GPU 训练：
@@ -74,7 +75,7 @@ uv run python train.py \
 uv run accelerate launch \
     --num_processes <number-of-gpus> train.py \
     --config-name=train/unet_timm_umi \
-    task.dataset_path=/path/to/dataset.zarr.zip
+    dataset.dataset_path=/path/to/dataset.zarr.zip
 ```
 
 可以使用原项目提供的[杯子排列任务数据集](https://real.stanford.edu/umi/data/zarr_datasets/)进行训练。本仓库不包含数据采集或 SLAM 预处理脚本。
@@ -86,30 +87,41 @@ uv run accelerate launch \
 ```bash
 uv run python train.py \
     --config-name=train/unet_timm_umi \
-    task.dataset_path=/path/to/dataset.zarr.zip
+    dataset.dataset_path=/path/to/dataset.zarr.zip
 ```
 
 初始化流程如下：
 
 1. `train.py` 加载 `diffusion_policy/config/train/<config-name>.yaml`，并解析其中所有 Hydra 插值。
 2. 顶层 `_target_` 指定并实例化训练 workspace。
-3. workspace 实例化 `cfg.policy`；policy 再根据各自的 `_target_` 实例化 diffusion scheduler 和 observation encoder。
-4. workspace 实例化 `cfg.task.dataset`，创建训练与验证 DataLoader，计算数据集 normalizer，并将其设置到 policy 中。
+3. Hydra 分别加载 `task`、`dataset`、`network` 和 `augmentation` config group，并合并为一个完整配置。`network` 同时选择互相兼容的 workspace、policy、optimizer 和 observation encoder。
+4. workspace 实例化 `cfg.policy` 和 `cfg.dataset`，创建训练与验证 DataLoader，计算数据集 normalizer，并将其设置到 policy 中。
 5. epoch 循环开始前，model、optimizer、scheduler 和 DataLoader 会交给 Hugging Face Accelerate。若 `training.use_ema: true`，还会创建一份 policy 的 EMA 副本。
+
+四类可复用配置分别位于：
+
+- `diffusion_policy/config/task/`：observation/action shape、horizon、latency 和 downsampling。
+- `diffusion_policy/config/dataset/`：Zarr 或 LeRobot loader、数据路径、cache 和数据集切分参数。
+- `diffusion_policy/config/network/`：workspace、policy、视觉 encoder、diffusion network 和 optimizer。
+- `diffusion_policy/config/augmentation/`：训练时的图像增广流水线。
+
+训练 config 只负责选择这些 group 并补充 epoch、batch size、日志和 checkpoint 设置。合并并解析后的完整配置通过 `Accelerator.init_trackers(..., config=...)` 上传到 W&B，因此一次 run 中可以同时查看 task、dataset、network 和 augmentation 设置。
 
 两条初始化分支最终在训练环节汇合：
 
 ```mermaid
 flowchart LR
-    N["网络初始化<br/>Hydra YAML → workspace<br/>policy + observation encoder<br/>U-Net 或 Transformer denoiser<br/>noise scheduler + optimizer"]
-    Z["Zarr 切分与预处理<br/>episode 训练集/验证集切分<br/>horizon + latency + downsampling<br/>位姿转换 + normalizer 统计量<br/>DataLoader batch"]
-    A["在线图像增广<br/>RandomCrop + resize<br/>ColorJitter / 其他 transforms<br/>在 policy 中、视觉 encoder 前执行"]
-    T["Diffusion 训练<br/>编码 observations<br/>向 action trajectory 添加噪声<br/>预测 noise 或 sample target<br/>MSE loss → backward → EMA"]
-
-    N -->|已初始化的模块| T
-    Z -->|RGB observations| A
-    A -->|增广后的图像| T
-    Z -->|低维 observations + actions| T
+    Z["Zarr zip / LMDB"] --> DZ["UmiDatasetZarr"]
+    L["LeRobot Parquet + MP4"] --> DL["UmiDatasetLeRobot"]
+    DZ --> B["UmiDatasetBase + SequenceSampler"]
+    DL --> B
+    B --> D["DataLoader batch"]
+    D --> N["normalizer"]
+    N --> A["训练态 RGB augmentation"]
+    A --> E["observation encoder"]
+    N --> T["normalized actions"]
+    E --> F["action diffusion loss"]
+    T --> F
 ```
 
 Zarr 与 LeRobot Dataset 都只负责读取原始图像并转换为 `[0,1]` 范围的 Tensor。训练 policy
@@ -122,7 +134,7 @@ observations 和 actions 直接进入归一化和 Diffusion 训练。
 ```bash
 uv run python train.py \
     --config-name=train/unet_timm_umi \
-    task.dataset_path=/path/to/dataset.zarr.zip \
+    dataset.dataset_path=/path/to/dataset.zarr.zip \
     dataloader.batch_size=32 \
     training.num_epochs=200 \
     policy.obs_encoder.pretrained=false
@@ -130,12 +142,12 @@ uv run python train.py \
 
 ### 选择神经网络架构
 
-通过顶层 config 名称选择 denoiser 架构。不能只修改类似 `model: unet` 的单个字符串，因为每份 config 都指定了一组互相兼容的 workspace、policy 和 observation encoder。
+通过 `network` config group 选择 denoiser 架构。该配置会一起切换互相兼容的 workspace、policy、optimizer 和 observation encoder，而不是只修改一个模型名称。例如，可以在任意兼容的训练 config 后添加 `network=transformer_timm`。
 
-| 架构 | Config 名称 | Denoiser | Observation conditioning |
+| 架构 | Network config | Denoiser | Observation conditioning |
 | --- | --- | --- | --- |
-| 1-D U-Net | `train/unet_timm_umi` | `ConditionalUnet1D` | 将 Timm 图像特征与低维 observations 展平并拼接为一个 global condition vector。 |
-| Transformer | `train/transformer_umi` | `TransformerForActionDiffusion` | 将图像特征与低维 observations 投影为 `n_emb` tokens，作为 conditioning tokens 输入。 |
+| 1-D U-Net | `network=unet_timm` | `ConditionalUnet1D` | 将 Timm 图像特征与低维 observations 展平并拼接为一个 global condition vector。 |
+| Transformer | `network=transformer_timm` | `TransformerForActionDiffusion` | 将图像特征与低维 observations 投影为 `n_emb` tokens，作为 conditioning tokens 输入。 |
 
 两种架构进行 Diffusion 的对象都是 **action trajectory**，而不是相机图像。相机 encoder 负责生成 observation condition，用于对 action trajectory 去噪。
 
@@ -205,24 +217,23 @@ dataset.zarr.zip
 
 ### 图像增广在哪里执行
 
-图像增广在 `policy.image_augmentor` 中配置。例如：
+图像增广由独立的 `augmentation` config group 配置。例如 `augmentation/crop_color.yaml`：
 
 ```yaml
-policy:
-  image_augmentor:
-    _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor
-    image_shape: [224, 224]
-    transforms:
-      - type: RandomCrop
-        ratio: 0.95
-      - _target_: torchvision.transforms.ColorJitter
-        brightness: 0.3
-        contrast: 0.4
-        saturation: 0.5
-        hue: 0.08
+image_augmentor:
+  _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor
+  image_shape: [224, 224]
+  transforms:
+    - type: RandomCrop
+      ratio: 0.95
+    - _target_: torchvision.transforms.ColorJitter
+      brightness: 0.3
+      contrast: 0.4
+      saturation: 0.5
+      hue: 0.08
 ```
 
-Hydra 会实例化标准 Torchvision transforms。自定义的 `RandomCrop` 项会由 `BatchImageAugmentor` 展开为 `RandomCrop(0.95 * image_size)`，然后 resize 回配置的图像尺寸。
+`network` config 通过 `${augmentation.image_augmentor}` 将它注入 `policy.image_augmentor`。Hydra 会实例化标准 Torchvision transforms。自定义的 `RandomCrop` 项会由 `BatchImageAugmentor` 展开为 `RandomCrop(0.95 * image_size)`，然后 resize 回配置的图像尺寸。可在命令行使用 `augmentation=none` 关闭增广，或使用 `augmentation=crop_rotate_color` 增加随机旋转。
 
 DataLoader batch 进入 policy 后，增强在视觉 encoder 之前执行。每个 batch 样本独立采样随机参数，同一样本的全部时间帧共享参数。增强只在 `policy.training` 为 true 的 `compute_loss()` 中运行，因此验证与 action prediction 保持确定性，也不会修改 Zarr、LeRobot 数据或 cache 中的样本。
 

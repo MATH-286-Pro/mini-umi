@@ -1,0 +1,16 @@
+name: crop_rotate_color
+
+image_augmentor:
+  _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor
+  image_shape: [224, 224]
+  transforms:
+    - type: RandomCrop
+      ratio: 0.95
+    - _target_: torchvision.transforms.RandomRotation
+      degrees: [-5.0, 5.0]
+      expand: false
+    - _target_: torchvision.transforms.ColorJitter
+      brightness: 0.3
+      contrast: 0.4
+      saturation: 0.5
+      hue: 0.08
