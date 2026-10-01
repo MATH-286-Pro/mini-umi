@@ -30,6 +30,7 @@ from diffusion_policy.common.action_schema import resolve_action_spec
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from diffusion_policy.evaluation import evaluate_configured_episodes
 from accelerate import Accelerator
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -188,6 +189,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 self.model.train()
 
                 step_log = dict()
+                media_log = dict()
                 # ========= train for this epoch ==========
                 if cfg.training.freeze_encoder:
                     self.model.obs_encoder.eval()
@@ -277,6 +279,29 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         del batch
                         del gt_action
                         del pred_action
+
+                evaluation_cfg = cfg.get('evaluation')
+                if evaluation_cfg is not None \
+                        and evaluation_cfg.enabled \
+                        and (self.epoch % evaluation_cfg.every) == 0 \
+                        and accelerator.is_main_process:
+                    evaluation_results = evaluate_configured_episodes(
+                        policy=policy,
+                        dataset=dataset,
+                        evaluation_cfg=evaluation_cfg,
+                        device=device,
+                        output_dir=self.output_dir,
+                        epoch=self.epoch,
+                    )
+                    for result in evaluation_results:
+                        metric_prefix = f'eval_episode_{result.episode_index:03d}'
+                        for metric_name, metric_value in result.metrics.items():
+                            step_log[f'{metric_prefix}_{metric_name}'] = metric_value
+                        if evaluation_cfg.log_to_wandb:
+                            media_log[f'eval/episode_{result.episode_index:03d}/trajectory'] = wandb.Video(
+                                data_or_path=str(result.gif_path),
+                                format='gif',
+                            )
                 
                 # checkpoint
                 if (self.epoch % cfg.training.checkpoint_every) == 0 and accelerator.is_main_process:
@@ -308,7 +333,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 # ========= eval end for this epoch ==========
                 # end of epoch
                 # log of last step is combined with validation and rollout
-                accelerator.log(step_log, step=self.global_step)
+                accelerator.log({**step_log, **media_log}, step=self.global_step)
                 json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1

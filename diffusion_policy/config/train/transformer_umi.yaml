@@ -51,6 +51,19 @@ training:
   max_val_steps: null
   tqdm_interval_sec: 1.0
 
+evaluation:
+  enabled: false
+  every: 10
+  episode_indices: [0]
+  robot_index: 0
+  dataset_fps: 60.0
+  frame_stride: 10
+  max_frames: 120
+  inference_batch_size: 4
+  gif_fps: 10.0
+  seed: ${training.seed}
+  log_to_wandb: true
+
 logging:
   project: umi
   resume: false
