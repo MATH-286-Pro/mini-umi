@@ -169,6 +169,37 @@ def _load_schema(dataset_path: Path, info: dict) -> dict:
     }
 
 
+def _add_episode_boundary_poses(data: dict, episode_ends: np.ndarray) -> None:
+    """Reconstruct legacy per-frame demo boundary poses from episode rows."""
+    episode_starts = np.concatenate(
+        [np.asarray([0], dtype=np.int64), episode_ends[:-1]],
+    )
+    episode_lengths = episode_ends - episode_starts
+    episode_indices = np.repeat(
+        np.arange(len(episode_ends), dtype=np.int64),
+        episode_lengths,
+    )
+    robot_prefixes = [
+        key.removesuffix("_eef_pos")
+        for key in data
+        if key.endswith("_eef_pos")
+    ]
+    for robot_prefix in robot_prefixes:
+        rotation_key = f"{robot_prefix}_eef_rot_axis_angle"
+        if rotation_key not in data:
+            continue
+        pose = np.concatenate(
+            [data[f"{robot_prefix}_eef_pos"], data[rotation_key]],
+            axis=-1,
+        )
+        start_key = f"{robot_prefix}_demo_start_pose"
+        end_key = f"{robot_prefix}_demo_end_pose"
+        if start_key not in data:
+            data[start_key] = pose[episode_starts][episode_indices]
+        if end_key not in data:
+            data[end_key] = pose[episode_ends - 1][episode_indices]
+
+
 class UmiDatasetLeRobot(UmiDatasetBase):
     """Train UMI policies from absolute-pose LeRobot v2.1 or v3.0 datasets.
 
@@ -227,6 +258,10 @@ class UmiDatasetLeRobot(UmiDatasetBase):
                 feature_key=feature_key,
                 shape=feature_shape,
             )
+        _add_episode_boundary_poses(
+            data=data,
+            episode_ends=episode_ends,
+        )
 
         replay_buffer = ReplayBuffer({
             "data": data,
