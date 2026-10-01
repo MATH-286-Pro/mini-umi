@@ -1,4 +1,5 @@
 name: crop_color
+episode_start_pose_noise_scale: 0.05
 
 image_augmentor:
   _target_: diffusion_policy.model.vision.image_augmentation.BatchImageAugmentor

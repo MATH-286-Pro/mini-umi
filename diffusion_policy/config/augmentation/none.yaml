@@ -1,2 +1,3 @@
 name: none
+episode_start_pose_noise_scale: 0.0
 image_augmentor: null

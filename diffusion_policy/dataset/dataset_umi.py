@@ -22,6 +22,7 @@ class UmiDatasetBase(BaseDataset):
         replay_buffer: ReplayBuffer,
         action_padding: bool=False,
         temporally_independent_normalization: bool=False,
+        episode_start_pose_noise_scale: float=0.05,
         seed: int=42,
         val_ratio: float=0.0,
         max_duration: Optional[float]=None,
@@ -106,6 +107,7 @@ class UmiDatasetBase(BaseDataset):
         self.max_duration = max_duration
         self.sampler = sampler
         self.temporally_independent_normalization = temporally_independent_normalization
+        self.episode_start_pose_noise_scale = float(episode_start_pose_noise_scale)
         self.threadpool_limits_is_applied = False
         self.normalizer_num_workers = normalizer_num_workers
 
@@ -249,7 +251,10 @@ class UmiDatasetBase(BaseDataset):
             # get start pose
             start_pose = obs_dict[f'robot{robot_id}_demo_start_pose'][0]
             # HACK: add noise to episode start pose
-            start_pose += np.random.normal(scale=[0.05,0.05,0.05,0.05,0.05,0.05],size=start_pose.shape)
+            start_pose += np.random.normal(
+                scale=self.episode_start_pose_noise_scale,
+                size=start_pose.shape,
+            )
             start_pose_mat = pose_to_mat(start_pose)
             rel_obs_pose_mat = convert_pose_mat_rep(
                 pose_mat,

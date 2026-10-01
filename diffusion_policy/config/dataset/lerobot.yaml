@@ -9,6 +9,7 @@ dataset:
   cache_dir: null
   action_padding: false
   temporally_independent_normalization: false
+  episode_start_pose_noise_scale: ${augmentation.episode_start_pose_noise_scale}
   max_duration: null
   normalizer_num_workers: 0
   seed: 42
