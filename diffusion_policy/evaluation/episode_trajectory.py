@@ -353,8 +353,9 @@ def evaluate_episode_trajectory(
 
     gif_path = save_trajectory_comparison_gif(
         output_path=output_path,
-        ground_truth_xyz=ground_truth_tf_world[..., :3, 3],
-        prediction_xyz=prediction_xyz,
+        ground_truth_tf_world=ground_truth_tf_world,
+        prediction_tf_world=prediction_tf_world,
+        target_tf_world=target_tf_world,
         frame_indices=relative_frame_indices,
         dataset_fps=dataset_fps,
         gif_fps=gif_fps,
