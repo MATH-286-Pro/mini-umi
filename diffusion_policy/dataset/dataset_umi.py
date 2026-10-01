@@ -238,8 +238,8 @@ class UmiDatasetBase(BaseDataset):
         # generate relative pose with respect to episode start
         for robot_id in range(self.num_robot):
             # HACK: add noise to episode start pose
-            if (f'robot{other_robot_id}_eef_pos_wrt_start' not in self.shape_meta['obs']) and \
-                (f'robot{other_robot_id}_eef_rot_axis_angle_wrt_start' not in self.shape_meta['obs']):
+            if (f'robot{robot_id}_eef_pos_wrt_start' not in self.shape_meta['obs']) and \
+                (f'robot{robot_id}_eef_rot_axis_angle_wrt_start' not in self.shape_meta['obs']):
                 continue
             
             # convert pose to mat
@@ -249,7 +249,7 @@ class UmiDatasetBase(BaseDataset):
             ], axis=-1))
             
             # get start pose
-            start_pose = obs_dict[f'robot{robot_id}_demo_start_pose'][0]
+            start_pose = obs_dict[f'robot{robot_id}_demo_start_pose'][0].copy()
             # HACK: add noise to episode start pose
             start_pose += np.random.normal(
                 scale=self.episode_start_pose_noise_scale,
