@@ -11,7 +11,7 @@ from diffusion_policy.dataset.normalization import (
     get_image_identity_normalizer, get_range_normalizer_from_stat)
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.dataset.replay_buffer import ReplayBuffer
-from diffusion_policy.dataset.sampler import SequenceSampler, get_robot_ids, get_val_mask
+from diffusion_policy.dataset.sampler import SequenceSampler, get_action_robot_ids, get_robot_ids, get_val_mask
 from diffusion_policy.dataset.base_dataset import BaseDataset
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from tool.linalg import convert_pose_mat_rep, mat_to_pose10d, pose_to_mat
@@ -30,6 +30,8 @@ class UmiDatasetBase(BaseDataset):
     ):
         self.robot_ids = get_robot_ids(shape_meta=shape_meta)
         self.num_robot = len(self.robot_ids)
+        self.action_robot_ids = get_action_robot_ids(shape_meta=shape_meta)
+        self.num_action_robot = len(self.action_robot_ids)
         rgb_keys = list()
         lowdim_keys = list()
         key_horizon = dict()
@@ -155,10 +157,10 @@ class UmiDatasetBase(BaseDataset):
                 data_cache[key] = data_cache[key].reshape(B*T, D)
 
         # action
-        assert data_cache['action'].shape[-1] % self.num_robot == 0
-        dim_a = data_cache['action'].shape[-1] // self.num_robot
+        assert data_cache['action'].shape[-1] % self.num_action_robot == 0
+        dim_a = data_cache['action'].shape[-1] // self.num_action_robot
         action_normalizers = list()
-        for i in range(self.num_robot):
+        for i in range(self.num_action_robot):
             action_normalizers.append(get_range_normalizer_from_stat(array_to_stats(data_cache['action'][..., i * dim_a: i * dim_a + 3])))              # pos
             action_normalizers.append(get_identity_normalizer_from_stat(array_to_stats(data_cache['action'][..., i * dim_a + 3: (i + 1) * dim_a - 1]))) # rot
             action_normalizers.append(get_range_normalizer_from_stat(array_to_stats(data_cache['action'][..., (i + 1) * dim_a - 1: (i + 1) * dim_a])))  # gripper
@@ -275,39 +277,41 @@ class UmiDatasetBase(BaseDataset):
             del obs_dict[key]
 
         actions = list()
-        for action_idx, robot_id in enumerate(self.robot_ids):
+        base_pose_mats = {}
+        for robot_id in self.robot_ids:
             # convert pose to mat
-            pose_mat = pose_to_mat(np.concatenate([
+            pose_mat = pose_to_mat(pose=np.concatenate([
                 obs_dict[f'robot{robot_id}_eef_pos'],
                 obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
             ], axis=-1))
-            action_mat = pose_to_mat(pose=data['action'][...,7 * action_idx: 7 * action_idx + 6])
-            
+            base_pose_mats[robot_id] = pose_mat[-1]
+
             # solve relative obs
             obs_pose_mat = convert_pose_mat_rep(
-                pose_mat, 
+                pose_mat=pose_mat,
                 base_pose_mat=pose_mat[-1],
                 pose_rep='relative',
                 backward=False)
-            action_pose_mat = convert_pose_mat_rep(
-                action_mat, 
-                base_pose_mat=pose_mat[-1],
-                pose_rep='relative',
-                backward=False)
-        
-            # convert pose to pos + rot6d representation
-            obs_pose = mat_to_pose10d(obs_pose_mat)
-            action_pose = mat_to_pose10d(action_pose_mat)
-        
-            action_gripper = data['action'][..., 7 * action_idx + 6: 7 * action_idx + 7]
-            actions.append(np.concatenate([action_pose, action_gripper], axis=-1))
 
+            # convert pose to pos + rot6d representation
+            obs_pose = mat_to_pose10d(tf=obs_pose_mat)
             # generate data
             obs_dict[f'robot{robot_id}_eef_pos'] = obs_pose[:,:3]
             obs_dict[f'robot{robot_id}_eef_rot_axis_angle'] = obs_pose[:,3:]
-            
+
+        for action_idx, robot_id in enumerate(self.action_robot_ids):
+            action_mat = pose_to_mat(pose=data['action'][..., 7 * action_idx: 7 * action_idx + 6])
+            action_pose_mat = convert_pose_mat_rep(
+                pose_mat=action_mat,
+                base_pose_mat=base_pose_mats[robot_id],
+                pose_rep='relative',
+                backward=False)
+            action_pose = mat_to_pose10d(tf=action_pose_mat)
+            action_gripper = data['action'][..., 7 * action_idx + 6: 7 * action_idx + 7]
+            actions.append(np.concatenate([action_pose, action_gripper], axis=-1))
+
         data['action'] = np.concatenate(actions, axis=-1)
-        
+
         torch_data = {
             'obs': dict_apply(obs_dict, lambda value: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)),
             'action': torch.from_numpy(data['action'].astype(np.float32))

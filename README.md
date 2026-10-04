@@ -183,6 +183,45 @@ policy:
 
 仓库中的双臂配置使用 `task: umi_bimanual`。task config 负责定义 observation keys、shape、horizon 和最终 action dimension；policy 通过 `shape_meta: ${task.shape_meta}` 读取这些值。
 
+### 选择参与预测的 action 机器人
+
+LeRobot 和 Zarr 使用相同的 `task.shape_meta.action` 配置。`robot_ids` 指定训练输出的
+机器人及拼接顺序，独立于 `obs` 中的机器人。例如 obs 包含 robot0、robot1、robot2，
+只预测 robot1、robot2：
+
+```yaml
+action:
+  robot_ids:
+    - robot1
+    - robot2
+  source_robot_ids: null
+  shape: [20]
+  # horizon、latency_steps、down_sample_steps、rotation_rep 沿用 task 配置
+```
+
+每台机器人的文件原始 action 为 7 维（position 3 + axis-angle 3 + gripper 1），
+训练时转换为 10 维。加载已有 `action` 时，先按源机器人映射选择并重排 7 维块，
+再进行采样、相对位姿转换和归一化。`shape` 应等于所选机器人数量乘以 10。
+
+`source_robot_ids: null` 采用本仓库旧数据约定：**文件中全部 `robotN_eef_pos` 对应的
+机器人按编号升序**，并校验原始 action 维度；该约定不依赖 YAML 的 obs 子集。
+如果文件只保存部分机器人的 action，或原始块顺序不同，必须显式声明，例如：
+
+```yaml
+source_robot_ids:
+  - robot2
+  - robot1
+robot_ids:
+  - robot1
+  - robot2
+```
+
+这会将原始 `[robot2, robot1]` 重排为 `[robot1, robot2]`。不要将 `source_robot_ids`
+填写成期望的输出顺序，它描述的是文件实际布局；仅靠向量维度无法验证机器人身份。
+不匹配的维度、重复/无效名称及缺失的所选机器人会报错。Zarr 没有 `action` 时，直接从
+所选机器人的状态构造动作，此时不使用 `source_robot_ids`。旧配置省略 `robot_ids` 时，
+仍默认选择 obs 中的机器人并按编号升序排列。
+
 ## 从 Zarr 数据到 Diffusion 训练 batch
 
 处理完成的数据集应是压缩的 Zarr store，逻辑结构如下：

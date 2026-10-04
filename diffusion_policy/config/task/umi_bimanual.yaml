@@ -117,6 +117,13 @@ shape_meta: &shape_meta
       ignore_by_policy: ${task.ignore_proprioception}
 
   action: 
+    # Select and order the robots whose actions the policy predicts.
+    # Stored action order; null assumes all dataset robots in numeric order.
+    # Set explicitly when the stored action has a subset or a different order.
+    source_robot_ids: null
+    robot_ids:
+      - robot0
+      - robot1
     shape: [20]
     horizon: ${task.action_horizon}
     latency_steps: 0 # float

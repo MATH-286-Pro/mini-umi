@@ -1,4 +1,5 @@
 from typing import Optional
+from collections.abc import Sequence
 import re
 import numpy as np
 import scipy.interpolate as si
@@ -16,6 +17,70 @@ def get_robot_ids_from_keys(keys) -> list[int]:
 def get_robot_ids(shape_meta: dict) -> list[int]:
     """Return configured observation robot IDs in numeric order."""
     return get_robot_ids_from_keys(keys=shape_meta['obs'])
+
+def _parse_robot_names(names, field: str) -> list[int]:
+    if not isinstance(names, Sequence) or isinstance(names, str):
+        raise ValueError(f"{field} must be a list of robot names")
+    ids = []
+    for name in names:
+        match = re.fullmatch(pattern=r'robot(0|[1-9]\d*)', string=name) if isinstance(name, str) else None
+        if match is None:
+            raise ValueError(f"Invalid {field} name: {name!r}; expected robot0, robot1, ...")
+        ids.append(int(match.group(1)))
+    if not ids or len(set(ids)) != len(ids):
+        raise ValueError(f"{field} must be nonempty and contain no duplicates")
+    return ids
+
+
+def get_action_robot_ids(shape_meta: dict) -> list[int]:
+    """Resolve selected action blocks in YAML order, defaulting to observation IDs."""
+    names = shape_meta['action'].get('robot_ids')
+    ids = get_robot_ids(shape_meta=shape_meta) if names is None else _parse_robot_names(names=names, field='action.robot_ids')
+    if not ids:
+        raise ValueError("No action robots configured")
+    for robot_id in ids:
+        for suffix in ('eef_pos', 'eef_rot_axis_angle', 'gripper_width'):
+            if f'robot{robot_id}_{suffix}' not in shape_meta['obs']:
+                raise ValueError(f"Action robot{robot_id} requires observation robot{robot_id}_{suffix}")
+    if list(shape_meta['action']['shape']) != [10 * len(ids)]:
+        raise ValueError("action.shape must equal [10 * number of action robots]")
+    return ids
+
+
+def select_replay_action(replay_buffer: ReplayBuffer, shape_meta: dict) -> np.ndarray:
+    """Select absolute 7D action blocks for either storage backend.
+
+    source_robot_ids describes the stored action, while robot_ids describes the
+    training output. Legacy full-state datasets use numeric robot order. Subset
+    or differently ordered stored actions require an explicit source_robot_ids.
+    Never infer the stored layout from the selected observation/action subset.
+    """
+    selected_ids = get_action_robot_ids(shape_meta=shape_meta)
+    if 'action' not in replay_buffer:
+        # construct action (concatenation of [eef_pos, eef_rot, gripper_width])
+        return np.concatenate([
+            replay_buffer[f'robot{robot_id}_{suffix}'][:]
+            for robot_id in selected_ids
+            for suffix in ('eef_pos', 'eef_rot_axis_angle', 'gripper_width')
+        ], axis=-1)
+
+    raw_action = replay_buffer['action'][:]
+    source_names = shape_meta['action'].get('source_robot_ids')
+    source_ids = (
+        get_robot_ids_from_keys(keys=replay_buffer.keys()) if source_names is None
+        else _parse_robot_names(names=source_names, field='action.source_robot_ids')
+    )
+    if not source_ids or raw_action.ndim != 2 or raw_action.shape[-1] != 7 * len(source_ids):
+        raise ValueError(
+            f"Stored action shape {raw_action.shape} does not match 7D blocks for source robots {source_ids}. "
+            "Set action.source_robot_ids to the exact robot order stored in the dataset."
+        )
+    missing_ids = set(selected_ids) - set(source_ids)
+    if missing_ids:
+        raise ValueError(f"Selected action robots {sorted(missing_ids)} are absent from action.source_robot_ids")
+    blocks = [source_ids.index(robot_id) for robot_id in selected_ids]
+    return raw_action.reshape(raw_action.shape[0], len(source_ids), 7)[:, blocks, :].reshape(raw_action.shape[0], 7 * len(selected_ids))
+
 
 def get_val_mask(n_episodes, val_ratio, seed=0):
     val_mask = np.zeros(n_episodes, dtype=bool)
@@ -64,6 +129,7 @@ class SequenceSampler:
         self.replay_buffer = dict()
         self.robot_ids = get_robot_ids(shape_meta=shape_meta)
         self.num_robot = len(self.robot_ids)
+        self.action_robot_ids = get_action_robot_ids(shape_meta=shape_meta)
         for key in lowdim_keys:
             if key.endswith('pos_abs'):
                 axis = shape_meta['obs'][key]['axis']
@@ -91,17 +157,8 @@ class SequenceSampler:
             self.replay_buffer[key] = replay_buffer[key]
         
         
-        if 'action' in replay_buffer:
-            self.replay_buffer['action'] = replay_buffer['action'][:]
-        else:
-            # construct action (concatenation of [eef_pos, eef_rot, gripper_width])
-            actions = list()
-            for robot_idx in self.robot_ids:
-                for cat in ['eef_pos', 'eef_rot_axis_angle', 'gripper_width']:
-                    key = f'robot{robot_idx}_{cat}'
-                    if key in self.replay_buffer:
-                        actions.append(self.replay_buffer[key])
-            self.replay_buffer['action'] = np.concatenate(actions, axis=-1)
+        self.replay_buffer['action'] = select_replay_action(
+            replay_buffer=replay_buffer, shape_meta=shape_meta)
 
         self.action_padding = action_padding
         self.indices = indices
