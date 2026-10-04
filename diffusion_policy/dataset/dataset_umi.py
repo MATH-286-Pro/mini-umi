@@ -11,7 +11,7 @@ from diffusion_policy.dataset.normalization import (
     get_image_identity_normalizer, get_range_normalizer_from_stat)
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.dataset.replay_buffer import ReplayBuffer
-from diffusion_policy.dataset.sampler import SequenceSampler, get_val_mask
+from diffusion_policy.dataset.sampler import SequenceSampler, get_robot_ids, get_val_mask
 from diffusion_policy.dataset.base_dataset import BaseDataset
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from tool.linalg import convert_pose_mat_rep, mat_to_pose10d, pose_to_mat
@@ -28,7 +28,8 @@ class UmiDatasetBase(BaseDataset):
         max_duration: Optional[float]=None,
         normalizer_num_workers: int=32
     ):
-        self.num_robot = 0
+        self.robot_ids = get_robot_ids(shape_meta=shape_meta)
+        self.num_robot = len(self.robot_ids)
         rgb_keys = list()
         lowdim_keys = list()
         key_horizon = dict()
@@ -42,9 +43,6 @@ class UmiDatasetBase(BaseDataset):
                 rgb_keys.append(key)
             elif type == 'low_dim':
                 lowdim_keys.append(key)
-
-            if key.endswith('eef_pos'):
-                self.num_robot += 1
 
             # solve obs_horizon
             horizon = shape_meta['obs'][key]['horizon']
@@ -77,8 +75,10 @@ class UmiDatasetBase(BaseDataset):
     
         for key in replay_buffer.keys():
             if key.endswith('_demo_start_pose') or key.endswith('_demo_end_pose'):
-                self.sampler_lowdim_keys.append(key)
                 query_key = key.split('_')[0] + '_eef_pos'
+                if query_key not in obs_shape_meta:
+                    continue
+                self.sampler_lowdim_keys.append(key)
                 key_horizon[key] = shape_meta['obs'][query_key]['horizon']
                 key_latency_steps[key] = shape_meta['obs'][query_key]['latency_steps']
                 key_down_sample_steps[key] = shape_meta['obs'][query_key]['down_sample_steps']
@@ -211,13 +211,13 @@ class UmiDatasetBase(BaseDataset):
             del data[key]
         
         # generate relative pose between two ees
-        for robot_id in range(self.num_robot):
+        for robot_id in self.robot_ids:
             # convert pose to mat
             pose_mat = pose_to_mat(np.concatenate([
                 obs_dict[f'robot{robot_id}_eef_pos'],
                 obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
             ], axis=-1))
-            for other_robot_id in range(self.num_robot):
+            for other_robot_id in self.robot_ids:
                 if robot_id == other_robot_id:
                     continue
                 if not f'robot{robot_id}_eef_pos_wrt{other_robot_id}' in self.lowdim_keys:
@@ -236,7 +236,7 @@ class UmiDatasetBase(BaseDataset):
                 obs_dict[f'robot{robot_id}_eef_rot_axis_angle_wrt{other_robot_id}'] = rel_obs_pose[:,3:]
                 
         # generate relative pose with respect to episode start
-        for robot_id in range(self.num_robot):
+        for robot_id in self.robot_ids:
             # HACK: add noise to episode start pose
             if (f'robot{robot_id}_eef_pos_wrt_start' not in self.shape_meta['obs']) and \
                 (f'robot{robot_id}_eef_rot_axis_angle_wrt_start' not in self.shape_meta['obs']):
@@ -275,13 +275,13 @@ class UmiDatasetBase(BaseDataset):
             del obs_dict[key]
 
         actions = list()
-        for robot_id in range(self.num_robot):
+        for action_idx, robot_id in enumerate(self.robot_ids):
             # convert pose to mat
             pose_mat = pose_to_mat(np.concatenate([
                 obs_dict[f'robot{robot_id}_eef_pos'],
                 obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
             ], axis=-1))
-            action_mat = pose_to_mat(data['action'][...,7 * robot_id: 7 * robot_id + 6])
+            action_mat = pose_to_mat(pose=data['action'][...,7 * action_idx: 7 * action_idx + 6])
             
             # solve relative obs
             obs_pose_mat = convert_pose_mat_rep(
@@ -299,7 +299,7 @@ class UmiDatasetBase(BaseDataset):
             obs_pose = mat_to_pose10d(obs_pose_mat)
             action_pose = mat_to_pose10d(action_pose_mat)
         
-            action_gripper = data['action'][..., 7 * robot_id + 6: 7 * robot_id + 7]
+            action_gripper = data['action'][..., 7 * action_idx + 6: 7 * action_idx + 7]
             actions.append(np.concatenate([action_pose, action_gripper], axis=-1))
 
             # generate data

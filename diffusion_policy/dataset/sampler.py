@@ -1,8 +1,21 @@
 from typing import Optional
+import re
 import numpy as np
 import scipy.interpolate as si
 import scipy.spatial.transform as st
 from diffusion_policy.dataset.replay_buffer import ReplayBuffer
+
+def get_robot_ids_from_keys(keys) -> list[int]:
+    """Return all robot IDs with EEF positions, sorted numerically."""
+    return sorted({
+        int(match.group(1))
+        for key in keys
+        if (match := re.fullmatch(pattern=r'robot(\d+)_eef_pos', string=key))
+    })
+
+def get_robot_ids(shape_meta: dict) -> list[int]:
+    """Return configured observation robot IDs in numeric order."""
+    return get_robot_ids_from_keys(keys=shape_meta['obs'])
 
 def get_val_mask(n_episodes, val_ratio, seed=0):
     val_mask = np.zeros(n_episodes, dtype=bool)
@@ -49,11 +62,9 @@ class SequenceSampler:
         
         # load low_dim to memory and keep rgb as compressed zarr array
         self.replay_buffer = dict()
-        self.num_robot = 0
+        self.robot_ids = get_robot_ids(shape_meta=shape_meta)
+        self.num_robot = len(self.robot_ids)
         for key in lowdim_keys:
-            if key.endswith('eef_pos'):
-                self.num_robot += 1
-
             if key.endswith('pos_abs'):
                 axis = shape_meta['obs'][key]['axis']
                 if isinstance(axis, int):
@@ -85,7 +96,7 @@ class SequenceSampler:
         else:
             # construct action (concatenation of [eef_pos, eef_rot, gripper_width])
             actions = list()
-            for robot_idx in range(self.num_robot):
+            for robot_idx in self.robot_ids:
                 for cat in ['eef_pos', 'eef_rot_axis_angle', 'gripper_width']:
                     key = f'robot{robot_idx}_{cat}'
                     if key in self.replay_buffer:
