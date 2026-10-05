@@ -164,3 +164,23 @@ def compute_relative_pose(
         output_rot_mat[idx] = current_rot_mat
     output_rot = rot_transformer_to_mat.inverse(output_rot_mat)
     return output_pos, output_rot
+
+
+def tf_to_rotation_rep(tf: np.ndarray, rotation_rep: str) -> np.ndarray:
+    """Encode rotations from [...,4,4] transforms, preserving leading dimensions.
+
+    rotation_6d uses the first two matrix rows. Quaternion names explicitly
+    specify xyzw or wxyz ordering; axis_angle is a rotation vector in radians.
+    """
+    if rotation_rep == 'rotation_6d':
+        return mat_to_rot6d(mat=tf[..., :3, :3])
+    rotation = st.Rotation.from_matrix(matrix=tf[..., :3, :3].reshape(-1, 3, 3))
+    if rotation_rep == 'axis_angle':
+        return rotation.as_rotvec().reshape(tf.shape[:-2] + (3,))
+    quat_xyzw = rotation.as_quat().reshape(tf.shape[:-2] + (4,))
+    if rotation_rep == 'quaternion_xyzw':
+        return quat_xyzw
+    if rotation_rep == 'quaternion_wxyz':
+        quat_wxyz = quat_xyzw[..., [3, 0, 1, 2]]
+        return quat_wxyz
+    raise ValueError(f'Unsupported rotation_rep: {rotation_rep!r}')
