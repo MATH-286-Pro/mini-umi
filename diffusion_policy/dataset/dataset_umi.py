@@ -1,175 +1,73 @@
 import copy
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 import torch
 from threadpoolctl import threadpool_limits
-from tqdm import trange, tqdm
+from tqdm import tqdm
 
 from diffusion_policy.dataset.normalization import (
     array_to_stats, concatenate_normalizer, get_identity_normalizer_from_stat,
     get_image_identity_normalizer, get_range_normalizer_from_stat)
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.dataset.replay_buffer import ReplayBuffer
-from diffusion_policy.dataset.sampler import SequenceSampler, get_action_robot_ids, get_robot_ids, get_val_mask
+from diffusion_policy.common.action_schema import resolve_action_spec
+from diffusion_policy.common.obs_schema import resolve_shape_meta, resolve_observation_fields, is_rgb_type
+from diffusion_policy.dataset.pose_data import load_pose_data
+from diffusion_policy.dataset.sampler import SequenceSampler, get_val_mask
 from diffusion_policy.dataset.base_dataset import BaseDataset
 from diffusion_policy.model.common.normalizer import LinearNormalizer
-from tool.linalg import convert_pose_mat_rep, mat_to_pose10d, pose_to_mat
+
 
 class UmiDatasetBase(BaseDataset):
-    def __init__(self,
-        shape_meta: dict,
-        replay_buffer: ReplayBuffer,
-        action_padding: bool=False,
-        temporally_independent_normalization: bool=False,
-        episode_start_pose_noise_scale: float=0.05,
-        seed: int=42,
-        val_ratio: float=0.0,
-        max_duration: Optional[float]=None,
-        normalizer_num_workers: int=32
-    ):
-        self.robot_ids = get_robot_ids(shape_meta=shape_meta)
-        self.num_robot = len(self.robot_ids)
-        self.action_robot_ids = get_action_robot_ids(shape_meta=shape_meta)
-        self.num_action_robot = len(self.action_robot_ids)
-        rgb_keys = list()
-        lowdim_keys = list()
-        key_horizon = dict()
-        key_down_sample_steps = dict()
-        key_latency_steps = dict()
-        obs_shape_meta = shape_meta['obs']
-        for key, attr in obs_shape_meta.items():
-            # solve obs type
-            type = attr.get('type', 'low_dim')
-            if type == 'rgb':
-                rgb_keys.append(key)
-            elif type == 'low_dim':
-                lowdim_keys.append(key)
-
-            # solve obs_horizon
-            horizon = shape_meta['obs'][key]['horizon']
-            key_horizon[key] = horizon
-
-            # solve latency_steps
-            latency_steps = shape_meta['obs'][key]['latency_steps']
-            key_latency_steps[key] = latency_steps
-
-            # solve down_sample_steps
-            down_sample_steps = shape_meta['obs'][key]['down_sample_steps']
-            key_down_sample_steps[key] = down_sample_steps
-
-        # solve action
-        key_horizon['action'] = shape_meta['action']['horizon']
-        key_latency_steps['action'] = shape_meta['action']['latency_steps']
-        key_down_sample_steps['action'] = shape_meta['action']['down_sample_steps']
-
-        val_mask = get_val_mask(
-            n_episodes=replay_buffer.n_episodes, 
-            val_ratio=val_ratio,
-            seed=seed
-        )
-        train_mask = ~val_mask
-
-        self.sampler_lowdim_keys = list()
-        for key in lowdim_keys:
-            if not 'wrt' in key:
-                self.sampler_lowdim_keys.append(key)
-    
-        # Pose dependencies are sampled internally even when omitted from obs.
-        reference_latency = shape_meta['action'].get('reference_latency_steps', 0)
-        if not np.isfinite(reference_latency) or reference_latency < 0:
-            raise ValueError('action.reference_latency_steps must be finite and nonnegative')
-        for robot_id in self.robot_ids:
-            pose_keys = [f'robot{robot_id}_eef_pos', f'robot{robot_id}_eef_rot_axis_angle']
-            config = next((obs_shape_meta[key] for key in pose_keys if key in obs_shape_meta),
-                next((attr for key, attr in obs_shape_meta.items() if key.startswith(f'robot{robot_id}_eef_')),
-                     dict(horizon=1, latency_steps=reference_latency, down_sample_steps=1)))
-            for key in pose_keys:
-                if key not in self.sampler_lowdim_keys:
-                    self.sampler_lowdim_keys.append(key)
-                    key_horizon[key] = config['horizon']
-                    key_latency_steps[key] = config['latency_steps']
-                    key_down_sample_steps[key] = config['down_sample_steps']
-        for robot_id in self.action_robot_ids:
-            for suffix in ('pos', 'rot_axis_angle'):
-                key = f'robot{robot_id}_reference_{suffix}'
-                self.sampler_lowdim_keys.append(key)
-                key_horizon[key] = 1
-                key_latency_steps[key] = reference_latency
-                key_down_sample_steps[key] = 1
-
-        for key in replay_buffer.keys():
-            if key.endswith('_demo_start_pose') or key.endswith('_demo_end_pose'):
-                query_key = key.split('_')[0] + '_eef_pos'
-                if query_key not in key_horizon:
-                    continue
-                self.sampler_lowdim_keys.append(key)
-                key_horizon[key] = key_horizon[query_key]
-                key_latency_steps[key] = key_latency_steps[query_key]
-                key_down_sample_steps[key] = key_down_sample_steps[query_key]
-
-        sampler = SequenceSampler(
-            shape_meta=shape_meta,
-            replay_buffer=replay_buffer,
-            rgb_keys=rgb_keys,
-            lowdim_keys=self.sampler_lowdim_keys,
-            key_horizon=key_horizon,
-            key_latency_steps=key_latency_steps,
-            key_down_sample_steps=key_down_sample_steps,
-            episode_mask=train_mask,
-            action_padding=action_padding,
-            max_duration=max_duration
-        )
-        self.shape_meta = shape_meta
+    def __init__(self, shape_meta, replay_buffer, action_padding=False,
+                 temporally_independent_normalization=False,
+                 episode_start_pose_noise_scale=0.05, seed=42, val_ratio=0.0,
+                 max_duration=None, normalizer_num_workers=32):
+        self.shape_meta = resolve_shape_meta(shape_meta=shape_meta)
+        self.action_spec = resolve_action_spec(shape_meta=self.shape_meta)
+        self.observation_fields = resolve_observation_fields(shape_meta=self.shape_meta)
+        self.lowdim_keys = list(self.observation_fields)
+        self.rgb_keys = [key for key, config in self.shape_meta['obs'].items() if is_rgb_type(type_name=config['type'])]
         self.replay_buffer = replay_buffer
-        self.rgb_keys = rgb_keys
-        self.lowdim_keys = lowdim_keys
-        self.key_horizon = key_horizon
-        self.key_latency_steps = key_latency_steps
-        self.key_down_sample_steps = key_down_sample_steps
-        self.val_mask = val_mask
-        self.action_padding = action_padding
-        self.max_duration = max_duration
-        self.sampler = sampler
+        self.pose_data = load_pose_data(replay_buffer=replay_buffer, observation_fields=self.observation_fields, action_spec=self.action_spec)
+        self.val_mask = get_val_mask(n_episodes=replay_buffer.n_episodes, val_ratio=val_ratio, seed=seed)
+        if not np.isfinite(episode_start_pose_noise_scale) or episode_start_pose_noise_scale < 0:
+            raise ValueError('episode_start_pose_noise_scale must be finite and nonnegative')
+        self.sampler = SequenceSampler(shape_meta=self.shape_meta, pose_data=self.pose_data,
+            rgb_arrays={key: replay_buffer[key] for key in self.rgb_keys}, episode_mask=~self.val_mask,
+            action_padding=action_padding, max_duration=max_duration,
+            episode_start_pose_noise_scale=episode_start_pose_noise_scale)
         self.temporally_independent_normalization = temporally_independent_normalization
-        self.episode_start_pose_noise_scale = float(episode_start_pose_noise_scale)
-        self.threadpool_limits_is_applied = False
         self.normalizer_num_workers = normalizer_num_workers
+        self.threadpool_limits_is_applied = False
 
-    
     def get_validation_dataset(self):
-        val_set = copy.copy(self)
-        val_set.sampler = SequenceSampler(
-            shape_meta=self.shape_meta,
-            replay_buffer=self.replay_buffer,
-            rgb_keys=self.rgb_keys,
-            lowdim_keys=self.sampler_lowdim_keys,
-            key_horizon=self.key_horizon,
-            key_latency_steps=self.key_latency_steps,
-            key_down_sample_steps=self.key_down_sample_steps,
-            episode_mask=self.val_mask,
-            action_padding=self.action_padding,
-            max_duration=self.max_duration
-        )
+        val_set = copy.copy(x=self)
+        val_set.sampler = self.sampler.with_episode_mask(episode_mask=self.val_mask)
         val_set.val_mask = ~self.val_mask
         return val_set
-    
+
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
+        if not len(self):
+            raise ValueError('Cannot fit a normalizer on an empty dataset')
         normalizer = LinearNormalizer()
 
         # enumerate the dataset and save low_dim data
         data_cache = {key: list() for key in self.lowdim_keys + ['action']}
-        self.sampler.ignore_rgb(True)
+        previous_ignore_rgb = self.sampler.ignore_rgb_is_applied
+        self.sampler.ignore_rgb(apply=True)
         dataloader = torch.utils.data.DataLoader(
             dataset=self,
             batch_size=64,
             num_workers=self.normalizer_num_workers,
         )
-        for batch in tqdm(dataloader, desc='iterating dataset to get normalization'):
-            for key in self.lowdim_keys:
-                data_cache[key].append(copy.deepcopy(batch['obs'][key]))
-            data_cache['action'].append(copy.deepcopy(batch['action']))
-        self.sampler.ignore_rgb(False)
+        try:
+            for batch in tqdm(iterable=dataloader, desc='iterating dataset to get normalization'):
+                for key in self.lowdim_keys:
+                    data_cache[key].append(copy.deepcopy(x=batch['obs'][key]))
+                data_cache['action'].append(copy.deepcopy(x=batch['action']))
+        finally:
+            self.sampler.ignore_rgb(apply=previous_ignore_rgb)
 
         for key in data_cache.keys():
             data_cache[key] = np.concatenate(data_cache[key])
@@ -180,30 +78,23 @@ class UmiDatasetBase(BaseDataset):
                 data_cache[key] = data_cache[key].reshape(B*T, D)
 
         # action
-        assert data_cache['action'].shape[-1] % self.num_action_robot == 0
-        dim_a = data_cache['action'].shape[-1] // self.num_action_robot
         action_normalizers = list()
-        for i in range(self.num_action_robot):
-            action_normalizers.append(get_range_normalizer_from_stat(array_to_stats(data_cache['action'][..., i * dim_a: i * dim_a + 3])))              # pos
-            action_normalizers.append(get_identity_normalizer_from_stat(array_to_stats(data_cache['action'][..., i * dim_a + 3: (i + 1) * dim_a - 1]))) # rot
-            action_normalizers.append(get_range_normalizer_from_stat(array_to_stats(data_cache['action'][..., (i + 1) * dim_a - 1: (i + 1) * dim_a])))  # gripper
+        offset = 0
+        for field in self.action_spec.fields:
+            stat = array_to_stats(arr=data_cache['action'][..., offset:offset + field.output_dim])
+            # pos / gripper use range normalization; rot preserves its representation.
+            factory = get_identity_normalizer_from_stat if field.kind == 'rot' else get_range_normalizer_from_stat
+            action_normalizers.append(factory(stat=stat))
+            offset += field.output_dim
 
-        normalizer['action'] = concatenate_normalizer(action_normalizers)
+        normalizer['action'] = concatenate_normalizer(normalizers=action_normalizers)
 
         # obs
         for key in self.lowdim_keys:
-            stat = array_to_stats(data_cache[key])
+            stat = array_to_stats(arr=data_cache[key])
 
-            if key.endswith('pos') or 'pos_wrt' in key:
-                this_normalizer = get_range_normalizer_from_stat(stat)
-            elif key.endswith('pos_abs'):
-                this_normalizer = get_range_normalizer_from_stat(stat)
-            elif key.endswith('rot_axis_angle') or 'rot_axis_angle_wrt' in key:
-                this_normalizer = get_identity_normalizer_from_stat(stat)
-            elif key.endswith('gripper_width'):
-                this_normalizer = get_range_normalizer_from_stat(stat)
-            else:
-                raise RuntimeError('unsupported')
+            factory = get_identity_normalizer_from_stat if self.observation_fields[key].kind == 'rot' else get_range_normalizer_from_stat
+            this_normalizer = factory(stat=stat)
             normalizer[key] = this_normalizer
 
         # image
@@ -216,131 +107,7 @@ class UmiDatasetBase(BaseDataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         if not self.threadpool_limits_is_applied:
-            threadpool_limits(1)
+            threadpool_limits(limits=1)
             self.threadpool_limits_is_applied = True
-        data = self.sampler.sample_sequence(idx)
-
-        obs_dict = dict()
-        for key in self.rgb_keys:
-            if not key in data:
-                continue
-            # move channel last to channel first
-            # T,H,W,C
-            # convert uint8 image to float32
-            image = torch.from_numpy(np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.)
-            obs_dict[key] = image
-            # T,C,H,W
-            del data[key]
-        for key in self.sampler_lowdim_keys:
-            obs_dict[key] = data[key].astype(np.float32)
-            del data[key]
-        
-        # generate relative pose between two ees
-        for robot_id in self.robot_ids:
-            # convert pose to mat
-            pose_mat = pose_to_mat(np.concatenate([
-                obs_dict[f'robot{robot_id}_eef_pos'],
-                obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
-            ], axis=-1))
-            for other_robot_id in self.robot_ids:
-                if robot_id == other_robot_id:
-                    continue
-                if not any(key in self.lowdim_keys for key in (f'robot{robot_id}_eef_pos_wrt{other_robot_id}', f'robot{robot_id}_eef_rot_axis_angle_wrt{other_robot_id}')):
-                    continue
-                other_pose_mat = pose_to_mat(np.concatenate([
-                    obs_dict[f'robot{other_robot_id}_eef_pos'],
-                    obs_dict[f'robot{other_robot_id}_eef_rot_axis_angle']
-                ], axis=-1))
-                rel_obs_pose_mat = convert_pose_mat_rep(
-                    pose_mat,
-                    base_pose_mat=other_pose_mat[-1],
-                    pose_rep='relative',
-                    backward=False)
-                rel_obs_pose = mat_to_pose10d(rel_obs_pose_mat)
-                obs_dict[f'robot{robot_id}_eef_pos_wrt{other_robot_id}'] = rel_obs_pose[:,:3]
-                obs_dict[f'robot{robot_id}_eef_rot_axis_angle_wrt{other_robot_id}'] = rel_obs_pose[:,3:]
-                
-        # generate relative pose with respect to episode start
-        for robot_id in self.robot_ids:
-            # HACK: add noise to episode start pose
-            if (f'robot{robot_id}_eef_pos_wrt_start' not in self.shape_meta['obs']) and \
-                (f'robot{robot_id}_eef_rot_axis_angle_wrt_start' not in self.shape_meta['obs']):
-                continue
-            
-            # convert pose to mat
-            pose_mat = pose_to_mat(np.concatenate([
-                obs_dict[f'robot{robot_id}_eef_pos'],
-                obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
-            ], axis=-1))
-            
-            # get start pose
-            start_pose = obs_dict[f'robot{robot_id}_demo_start_pose'][0].copy()
-            # HACK: add noise to episode start pose
-            start_pose += np.random.normal(
-                scale=self.episode_start_pose_noise_scale,
-                size=start_pose.shape,
-            )
-            start_pose_mat = pose_to_mat(start_pose)
-            rel_obs_pose_mat = convert_pose_mat_rep(
-                pose_mat,
-                base_pose_mat=start_pose_mat,
-                pose_rep='relative',
-                backward=False)
-            
-            rel_obs_pose = mat_to_pose10d(rel_obs_pose_mat)
-            # HACK: add noise to episode start pose
-            obs_dict[f'robot{robot_id}_eef_pos_wrt_start'] = rel_obs_pose[:,:3]
-            obs_dict[f'robot{robot_id}_eef_rot_axis_angle_wrt_start'] = rel_obs_pose[:,3:]
-
-        del_keys = list()
-        for key in obs_dict:
-            if key.endswith('_demo_start_pose') or key.endswith('_demo_end_pose'):
-                del_keys.append(key)
-        for key in del_keys:
-            del obs_dict[key]
-
-        actions = list()
-        base_pose_mats = {
-            robot_id: pose_to_mat(pose=np.concatenate([
-                obs_dict[f'robot{robot_id}_reference_pos'][0],
-                obs_dict[f'robot{robot_id}_reference_rot_axis_angle'][0],
-            ], axis=-1)) for robot_id in self.action_robot_ids
-        }
-        for robot_id in self.robot_ids:
-            # convert pose to mat
-            pose_mat = pose_to_mat(pose=np.concatenate([
-                obs_dict[f'robot{robot_id}_eef_pos'],
-                obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
-            ], axis=-1))
-
-            # solve relative obs
-            obs_pose_mat = convert_pose_mat_rep(
-                pose_mat=pose_mat,
-                base_pose_mat=pose_mat[-1],
-                pose_rep='relative',
-                backward=False)
-
-            # convert pose to pos + rot6d representation
-            obs_pose = mat_to_pose10d(tf=obs_pose_mat)
-            # generate data
-            obs_dict[f'robot{robot_id}_eef_pos'] = obs_pose[:,:3]
-            obs_dict[f'robot{robot_id}_eef_rot_axis_angle'] = obs_pose[:,3:]
-
-        for action_idx, robot_id in enumerate(self.action_robot_ids):
-            action_mat = pose_to_mat(pose=data['action'][..., 7 * action_idx: 7 * action_idx + 6])
-            action_pose_mat = convert_pose_mat_rep(
-                pose_mat=action_mat,
-                base_pose_mat=base_pose_mats[robot_id],
-                pose_rep='relative',
-                backward=False)
-            action_pose = mat_to_pose10d(tf=action_pose_mat)
-            action_gripper = data['action'][..., 7 * action_idx + 6: 7 * action_idx + 7]
-            actions.append(np.concatenate([action_pose, action_gripper], axis=-1))
-
-        data['action'] = np.concatenate(actions, axis=-1)
-
-        torch_data = {
-            'obs': dict_apply(x={key: value for key, value in obs_dict.items() if key in self.shape_meta['obs']}, func=lambda value: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)),
-            'action': torch.from_numpy(data['action'].astype(np.float32))
-        }
-        return torch_data
+        data = self.sampler.sample_sequence(idx=idx)
+        return dict_apply(x=data, func=lambda value: torch.from_numpy(value))

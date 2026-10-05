@@ -13,109 +13,125 @@ action_horizon: 16
 shape_meta: &shape_meta
 
   obs:
-  
+
     camera0_rgb:
-      shape: [3, 224, 224]
+      type: rgb3x224x224d
       horizon: ${task.img_obs_horizon} # int
       latency_steps: 0 # float
       down_sample_steps: ${task.obs_down_sample_steps} # int
-      type: rgb
 
     robot0_eef_pos:
-      shape: [3]
+      source: robot0_eef_tf
+      type: pos3d_xyz
+      relative_to: robot0_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
-      
-    robot0_eef_rot_axis_angle:
-      raw_shape: [3]
-      shape: [6]
+
+    robot0_eef_rot:
+      source: robot0_eef_tf
+      type: rot6d_row
+      relative_to: robot0_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
-      rotation_rep: rotation_6d
 
     robot0_gripper_width:
-      shape: [1]
+      source: robot0_gripper_width
+      type: width1d
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
 
     camera1_rgb:
-      shape: [3, 224, 224]
+      type: rgb3x224x224d
       horizon: ${task.img_obs_horizon} # int
       latency_steps: 0 # float
       down_sample_steps: ${task.obs_down_sample_steps} # int
-      type: rgb
 
     robot1_eef_pos:
-      shape: [3]
+      source: robot1_eef_tf
+      type: pos3d_xyz
+      relative_to: robot1_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
 
-    robot1_eef_rot_axis_angle:
-      raw_shape: [3]
-      shape: [6]
+    robot1_eef_rot:
+      source: robot1_eef_tf
+      type: rot6d_row
+      relative_to: robot1_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
-      rotation_rep: rotation_6d
 
     robot1_gripper_width:
-      shape: [1]
+      source: robot1_gripper_width
+      type: width1d
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
 
     robot0_eef_pos_wrt1:
-      shape: [3]
+      source: robot0_eef_tf
+      type: pos3d_xyz
+      relative_to: robot1_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
 
-    robot0_eef_rot_axis_angle_wrt1:
-      raw_shape: [3]
-      shape: [6]
+    robot0_eef_rot_wrt1:
+      source: robot0_eef_tf
+      type: rot6d_row
+      relative_to: robot1_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
 
     robot1_eef_pos_wrt0:
-      shape: [3]
+      source: robot1_eef_tf
+      type: pos3d_xyz
+      relative_to: robot0_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
-
-    robot1_eef_rot_axis_angle_wrt0:
-      raw_shape: [3]
-      shape: [6]
+      
+    robot1_eef_rot_wrt0:
+      source: robot1_eef_tf
+      type: rot6d_row
+      relative_to: robot0_eef_at_obs_end
       horizon: ${task.low_dim_obs_horizon} # int
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
-      type: low_dim
 
   action:
     # Reference pose is internal data, independent of the network obs selection.
     reference_latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'}
-    # Select and order the robots whose actions the policy predicts.
-    # Stored action order; null assumes all dataset robots in numeric order.
-    # Set explicitly when the stored action has a subset or a different order.
-    source_robot_ids: null
-    robot_ids:
-      - robot0
-      - robot1
-    shape: [20]
-    horizon: ${task.action_horizon}
-    latency_steps: 0 # float
-    down_sample_steps: ${task.obs_down_sample_steps} # int
-    rotation_rep: rotation_6d
+    basic:
+      horizon: ${task.action_horizon}
+      latency_steps: 0
+      down_sample_steps: ${task.obs_down_sample_steps}
+
+    details:
+
+      - source: robot0_eef_tf
+        type: pos3d_xyz
+        relative_to: robot0_eef_at_obs_end
+
+      - source: robot0_eef_tf
+        type: rot6d_row
+        relative_to: robot0_eef_at_obs_end
+
+      - source: robot0_gripper_width
+        type: width1d
+
+      - source: robot1_eef_tf
+        type: pos3d_xyz
+        relative_to: robot1_eef_at_obs_end
+
+      - source: robot1_eef_tf
+        type: rot6d_row
+        relative_to: robot1_eef_at_obs_end
+
+      - source: robot1_gripper_width
+        type: width1d

@@ -10,6 +10,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.transformer_for_action_diffusion import TransformerForActionDiffusion
 from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common.action_schema import resolve_action_spec
 from diffusion_policy.model.vision.transformer_obs_encoder import TransformerObsEncoder
 from diffusion_policy.model.vision.image_augmentation import augment_observations
 
@@ -32,10 +33,11 @@ class DiffusionTransformerTimmPolicy(BaseImagePolicy):
         super().__init__()
 
         # parse shapes
-        action_shape = shape_meta['action']['shape']
+        action_spec = resolve_action_spec(shape_meta=shape_meta)
+        action_shape = (action_spec.output_dim,)
         assert len(action_shape) == 1
         action_dim = action_shape[0]
-        action_horizon = shape_meta['action']['horizon']
+        action_horizon = action_spec.horizon
         
         obs_shape = obs_encoder.output_shape()
         assert obs_shape[-1] == n_emb

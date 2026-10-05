@@ -1,3 +1,4 @@
+from diffusion_policy.common.obs_schema import resolve_shape_meta, is_rgb_type
 import copy
 
 import timm
@@ -69,6 +70,7 @@ class TransformerObsEncoder(ModuleAttrMixin):
         Assumes low_dim input: B,T,D
         """
         super().__init__()
+        shape_meta = resolve_shape_meta(shape_meta=shape_meta)
         
         rgb_keys = list()
         low_dim_keys = list()
@@ -153,15 +155,15 @@ class TransformerObsEncoder(ModuleAttrMixin):
         obs_shape_meta = shape_meta['obs']
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
-            type = attr.get('type', 'low_dim')
-            if type == 'rgb':
+            type_name = attr['type']
+            if is_rgb_type(type_name=type_name):
                 assert image_shape is None or image_shape == shape[1:]
                 image_shape = shape[1:]
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
-            type = attr.get('type', 'low_dim')
+            type_name = attr['type']
             key_shape_map[key] = shape
-            if type == 'rgb':
+            if is_rgb_type(type_name=type_name):
                 rgb_keys.append(key)
 
                 this_model = model if share_rgb_model else copy.deepcopy(model)
@@ -179,7 +181,7 @@ class TransformerObsEncoder(ModuleAttrMixin):
                     proj = nn.Linear(in_features=feature_size, out_features=n_emb)
                 key_projection_map[key] = proj
 
-            elif type == 'low_dim':
+            else:
                 dim = np.prod(shape)
                 proj = nn.Identity()
                 if dim != n_emb:
@@ -187,8 +189,6 @@ class TransformerObsEncoder(ModuleAttrMixin):
                 key_projection_map[key] = proj
 
                 low_dim_keys.append(key)
-            else:
-                raise RuntimeError(f"Unsupported obs type: {type}")
         
         feature_map_shape = [x // downsample_ratio for x in image_shape]
             

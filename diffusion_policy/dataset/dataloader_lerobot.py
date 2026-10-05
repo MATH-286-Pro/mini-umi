@@ -4,6 +4,8 @@ from pathlib import Path
 import av
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from diffusion_policy.dataset.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.dataset_umi import UmiDatasetBase
@@ -74,7 +76,10 @@ def _read_parquet_tree(path: Path) -> pd.DataFrame:
     files = sorted(path.rglob("*.parquet"))
     if not files:
         raise FileNotFoundError(f"No Parquet files found under {path}")
-    return pd.concat((pd.read_parquet(file) for file in files), ignore_index=True)
+    # Concatenate before converting to pandas: HF matrix extension dtypes can
+    # fail dtype equality during pandas concat across v2.1 episode files.
+    table = pa.concat_tables(tables=[pq.read_table(source=file) for file in files])
+    return table.to_pandas()
 
 
 def _read_jsonlines(path: Path) -> pd.DataFrame:
@@ -142,7 +147,8 @@ def _column_to_numpy(frames: pd.DataFrame, info: dict, feature_key: str) -> np.n
     shape = tuple(info["features"][feature_key]["shape"])
     values = frames[feature_key].to_numpy()
     if shape:
-        values = np.stack(values).reshape((len(frames),) + shape)
+        # Parquet nested lists materialize as object arrays of matrix rows.
+        values = np.stack(arrays=[np.asarray(a=value.tolist()) if isinstance(value, np.ndarray) and value.dtype == object else value for value in values]).reshape((len(frames),) + shape)
     return values
 
 
@@ -154,8 +160,6 @@ def _load_schema(dataset_path: Path, info: dict) -> dict:
 
     features = info["features"]
     return {
-        "action_key": "action",
-        "action_source": info.get("umi_action_source", "stored"),
         "state_features": {
             key.removeprefix("observation.state."): key
             for key in features
@@ -169,43 +173,11 @@ def _load_schema(dataset_path: Path, info: dict) -> dict:
     }
 
 
-def _add_episode_boundary_poses(data: dict, episode_ends: np.ndarray) -> None:
-    """Reconstruct legacy per-frame demo boundary poses from episode rows."""
-    episode_starts = np.concatenate(
-        [np.asarray([0], dtype=np.int64), episode_ends[:-1]],
-    )
-    episode_lengths = episode_ends - episode_starts
-    episode_indices = np.repeat(
-        np.arange(len(episode_ends), dtype=np.int64),
-        episode_lengths,
-    )
-    robot_prefixes = [
-        key.removesuffix("_eef_pos")
-        for key in data
-        if key.endswith("_eef_pos")
-    ]
-    for robot_prefix in robot_prefixes:
-        rotation_key = f"{robot_prefix}_eef_rot_axis_angle"
-        if rotation_key not in data:
-            continue
-        pose = np.concatenate(
-            [data[f"{robot_prefix}_eef_pos"], data[rotation_key]],
-            axis=-1,
-        )
-        start_key = f"{robot_prefix}_demo_start_pose"
-        end_key = f"{robot_prefix}_demo_end_pose"
-        if start_key not in data:
-            data[start_key] = pose[episode_starts][episode_indices]
-        if end_key not in data:
-            data[end_key] = pose[episode_ends - 1][episode_indices]
-
-
 class UmiDatasetLeRobot(UmiDatasetBase):
     """Train UMI policies from absolute-pose LeRobot v2.1 or v3.0 datasets.
 
-    LeRobot remains the storage layer. This adapter reconstructs the legacy
-    ReplayBuffer interface so the existing timestamp interpolation, horizon
-    sampling, SE(3) relative conversion, and normalization stay identical.
+    LeRobot remains the storage layer. The shared dataset decodes stored poses
+    to homogeneous transforms before sampling and per-field model encoding.
     """
 
     def __init__(self,
@@ -236,16 +208,9 @@ class UmiDatasetLeRobot(UmiDatasetBase):
         frames = _read_parquet_tree(dataset_path / "data")
         frames = frames.sort_values("index").reset_index(drop=True)
         schema = _load_schema(dataset_path, info)
-        action_source = schema.get("action_source", info.get("umi_action_source", "stored"))
-        if action_source not in ("state", "stored"):
-            raise ValueError(f"Unsupported UMI action_source: {action_source!r}")
-        if schema.get("action_is_placeholder") and action_source != "state":
-            raise ValueError("Placeholder action must be loaded with action_source='state'")
         data = {}
-        if action_source == "stored":
-            data["action"] = _column_to_numpy(frames=frames, info=info, feature_key=schema["action_key"])
         # State-derived datasets deliberately omit action from the ReplayBuffer.
-        # The sampler constructs actions from the configured robot states.
+        # The shared dataset constructs canonical action poses from selected states.
         for raw_key, feature_key in schema["state_features"].items():
             data[raw_key] = _column_to_numpy(frames, info, feature_key)
         for raw_key, feature_key in schema["video_features"].items():
@@ -258,10 +223,6 @@ class UmiDatasetLeRobot(UmiDatasetBase):
                 feature_key=feature_key,
                 shape=feature_shape,
             )
-        _add_episode_boundary_poses(
-            data=data,
-            episode_ends=episode_ends,
-        )
 
         replay_buffer = ReplayBuffer({
             "data": data,

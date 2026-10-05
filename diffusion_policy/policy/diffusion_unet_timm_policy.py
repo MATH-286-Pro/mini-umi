@@ -13,6 +13,7 @@ from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.model.vision.timm_obs_encoder import TimmObsEncoder
 from diffusion_policy.model.vision.image_augmentation import augment_observations
 from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common.action_schema import resolve_action_spec
 
 
 class DiffusionUnetTimmPolicy(BaseImagePolicy):
@@ -37,10 +38,11 @@ class DiffusionUnetTimmPolicy(BaseImagePolicy):
         super().__init__()
 
         # parse shapes
-        action_shape = shape_meta['action']['shape']
+        action_spec = resolve_action_spec(shape_meta=shape_meta)
+        action_shape = (action_spec.output_dim,)
         assert len(action_shape) == 1
         action_dim = action_shape[0]
-        action_horizon = shape_meta['action']['horizon']
+        action_horizon = action_spec.horizon
         # get feature dim
         obs_feature_dim = np.prod(obs_encoder.output_shape())
 
