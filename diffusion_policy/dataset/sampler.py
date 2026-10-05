@@ -16,7 +16,14 @@ def get_robot_ids_from_keys(keys) -> list[int]:
 
 def get_robot_ids(shape_meta: dict) -> list[int]:
     """Return configured observation robot IDs in numeric order."""
-    return get_robot_ids_from_keys(keys=shape_meta['obs'])
+    ids = set()
+    for key in shape_meta['obs']:
+        match = re.fullmatch(pattern=r'robot(\d+)_eef_(?:pos|rot_axis_angle)(?:_abs|_wrt(\d+|_start))?', string=key)
+        if match:
+            ids.add(int(match.group(1)))
+            if match.group(2) and match.group(2) != '_start':
+                ids.add(int(match.group(2)))
+    return sorted(ids)
 
 def _parse_robot_names(names, field: str) -> list[int]:
     if not isinstance(names, Sequence) or isinstance(names, str):
@@ -38,10 +45,6 @@ def get_action_robot_ids(shape_meta: dict) -> list[int]:
     ids = get_robot_ids(shape_meta=shape_meta) if names is None else _parse_robot_names(names=names, field='action.robot_ids')
     if not ids:
         raise ValueError("No action robots configured")
-    for robot_id in ids:
-        for suffix in ('eef_pos', 'eef_rot_axis_angle', 'gripper_width'):
-            if f'robot{robot_id}_{suffix}' not in shape_meta['obs']:
-                raise ValueError(f"Action robot{robot_id} requires observation robot{robot_id}_{suffix}")
     if list(shape_meta['action']['shape']) != [10 * len(ids)]:
         raise ValueError("action.shape must equal [10 * number of action robots]")
     return ids
@@ -131,7 +134,9 @@ class SequenceSampler:
         self.num_robot = len(self.robot_ids)
         self.action_robot_ids = get_action_robot_ids(shape_meta=shape_meta)
         for key in lowdim_keys:
-            if key.endswith('pos_abs'):
+            if '_reference_' in key:
+                self.replay_buffer[key] = replay_buffer[key.replace('_reference_', '_eef_')][:]
+            elif key.endswith('pos_abs'):
                 axis = shape_meta['obs'][key]['axis']
                 if isinstance(axis, int):
                     axis = [axis]

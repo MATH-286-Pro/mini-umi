@@ -279,3 +279,11 @@ DataLoader batch 进入 policy 后，增强在视觉 encoder 之前执行。每�
 ## 许可证
 
 本项目基于 [MIT License](LICENSE) 发布，并基于原始 [UMI 项目](https://umi-gripper.github.io/)开发。
+
+### 选择网络观测输入
+
+`shape_meta.obs` 只声明实际输入网络的字段。需要纯视觉输入时，注释或删除
+`umi.yaml` 中的 low-dim obs；保留部分字段即可只使用这些状态。
+计算相对 action 所需的末端位姿由数据集内部读取，不要求出现在 obs 中。
+`action.reference_latency_steps` 独立指定参考位姿的时间偏移，单位为源数据帧，
+默认 task 配置使用相机与机器人观测延迟之差；删除 obs 不会改变这个参考时刻。

@@ -75,15 +75,38 @@ class UmiDatasetBase(BaseDataset):
             if not 'wrt' in key:
                 self.sampler_lowdim_keys.append(key)
     
+        # Pose dependencies are sampled internally even when omitted from obs.
+        reference_latency = shape_meta['action'].get('reference_latency_steps', 0)
+        if not np.isfinite(reference_latency) or reference_latency < 0:
+            raise ValueError('action.reference_latency_steps must be finite and nonnegative')
+        for robot_id in self.robot_ids:
+            pose_keys = [f'robot{robot_id}_eef_pos', f'robot{robot_id}_eef_rot_axis_angle']
+            config = next((obs_shape_meta[key] for key in pose_keys if key in obs_shape_meta),
+                next((attr for key, attr in obs_shape_meta.items() if key.startswith(f'robot{robot_id}_eef_')),
+                     dict(horizon=1, latency_steps=reference_latency, down_sample_steps=1)))
+            for key in pose_keys:
+                if key not in self.sampler_lowdim_keys:
+                    self.sampler_lowdim_keys.append(key)
+                    key_horizon[key] = config['horizon']
+                    key_latency_steps[key] = config['latency_steps']
+                    key_down_sample_steps[key] = config['down_sample_steps']
+        for robot_id in self.action_robot_ids:
+            for suffix in ('pos', 'rot_axis_angle'):
+                key = f'robot{robot_id}_reference_{suffix}'
+                self.sampler_lowdim_keys.append(key)
+                key_horizon[key] = 1
+                key_latency_steps[key] = reference_latency
+                key_down_sample_steps[key] = 1
+
         for key in replay_buffer.keys():
             if key.endswith('_demo_start_pose') or key.endswith('_demo_end_pose'):
                 query_key = key.split('_')[0] + '_eef_pos'
-                if query_key not in obs_shape_meta:
+                if query_key not in key_horizon:
                     continue
                 self.sampler_lowdim_keys.append(key)
-                key_horizon[key] = shape_meta['obs'][query_key]['horizon']
-                key_latency_steps[key] = shape_meta['obs'][query_key]['latency_steps']
-                key_down_sample_steps[key] = shape_meta['obs'][query_key]['down_sample_steps']
+                key_horizon[key] = key_horizon[query_key]
+                key_latency_steps[key] = key_latency_steps[query_key]
+                key_down_sample_steps[key] = key_down_sample_steps[query_key]
 
         sampler = SequenceSampler(
             shape_meta=shape_meta,
@@ -222,7 +245,7 @@ class UmiDatasetBase(BaseDataset):
             for other_robot_id in self.robot_ids:
                 if robot_id == other_robot_id:
                     continue
-                if not f'robot{robot_id}_eef_pos_wrt{other_robot_id}' in self.lowdim_keys:
+                if not any(key in self.lowdim_keys for key in (f'robot{robot_id}_eef_pos_wrt{other_robot_id}', f'robot{robot_id}_eef_rot_axis_angle_wrt{other_robot_id}')):
                     continue
                 other_pose_mat = pose_to_mat(np.concatenate([
                     obs_dict[f'robot{other_robot_id}_eef_pos'],
@@ -266,7 +289,7 @@ class UmiDatasetBase(BaseDataset):
             
             rel_obs_pose = mat_to_pose10d(rel_obs_pose_mat)
             # HACK: add noise to episode start pose
-            # obs_dict[f'robot{robot_id}_eef_pos_wrt_start'] = rel_obs_pose[:,:3]
+            obs_dict[f'robot{robot_id}_eef_pos_wrt_start'] = rel_obs_pose[:,:3]
             obs_dict[f'robot{robot_id}_eef_rot_axis_angle_wrt_start'] = rel_obs_pose[:,3:]
 
         del_keys = list()
@@ -277,14 +300,18 @@ class UmiDatasetBase(BaseDataset):
             del obs_dict[key]
 
         actions = list()
-        base_pose_mats = {}
+        base_pose_mats = {
+            robot_id: pose_to_mat(pose=np.concatenate([
+                obs_dict[f'robot{robot_id}_reference_pos'][0],
+                obs_dict[f'robot{robot_id}_reference_rot_axis_angle'][0],
+            ], axis=-1)) for robot_id in self.action_robot_ids
+        }
         for robot_id in self.robot_ids:
             # convert pose to mat
             pose_mat = pose_to_mat(pose=np.concatenate([
                 obs_dict[f'robot{robot_id}_eef_pos'],
                 obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
             ], axis=-1))
-            base_pose_mats[robot_id] = pose_mat[-1]
 
             # solve relative obs
             obs_pose_mat = convert_pose_mat_rep(
@@ -313,7 +340,7 @@ class UmiDatasetBase(BaseDataset):
         data['action'] = np.concatenate(actions, axis=-1)
 
         torch_data = {
-            'obs': dict_apply(obs_dict, lambda value: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)),
+            'obs': dict_apply(x={key: value for key, value in obs_dict.items() if key in self.shape_meta['obs']}, func=lambda value: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)),
             'action': torch.from_numpy(data['action'].astype(np.float32))
         }
         return torch_data

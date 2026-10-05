@@ -144,8 +144,7 @@ class TimmObsEncoder(ModuleAttrMixin):
                 key_model_map[key] = this_model
 
             elif type == 'low_dim':
-                if not attr.get('ignore_by_policy', False):
-                    low_dim_keys.append(key)
+                low_dim_keys.append(key)
             else:
                 raise RuntimeError(f"Unsupported obs type: {type}")
         

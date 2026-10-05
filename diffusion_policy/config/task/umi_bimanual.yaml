@@ -9,18 +9,17 @@ obs_down_sample_steps: 3 # 3, 1
 low_dim_obs_horizon: 2
 img_obs_horizon: 2
 action_horizon: 16
-ignore_proprioception: False
 
 shape_meta: &shape_meta
 
   obs:
+  
     camera0_rgb:
       shape: [3, 224, 224]
       horizon: ${task.img_obs_horizon} # int
       latency_steps: 0 # float
       down_sample_steps: ${task.obs_down_sample_steps} # int
       type: rgb
-      ignore_by_policy: False
 
     robot0_eef_pos:
       shape: [3]
@@ -28,8 +27,7 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
-
+      
     robot0_eef_rot_axis_angle:
       raw_shape: [3]
       shape: [6]
@@ -38,7 +36,6 @@ shape_meta: &shape_meta
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
       rotation_rep: rotation_6d
-      ignore_by_policy: ${task.ignore_proprioception}
 
     robot0_gripper_width:
       shape: [1]
@@ -46,7 +43,6 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
 
     camera1_rgb:
       shape: [3, 224, 224]
@@ -54,7 +50,6 @@ shape_meta: &shape_meta
       latency_steps: 0 # float
       down_sample_steps: ${task.obs_down_sample_steps} # int
       type: rgb
-      ignore_by_policy: False
 
     robot1_eef_pos:
       shape: [3]
@@ -62,7 +57,6 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
 
     robot1_eef_rot_axis_angle:
       raw_shape: [3]
@@ -72,7 +66,6 @@ shape_meta: &shape_meta
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
       rotation_rep: rotation_6d
-      ignore_by_policy: ${task.ignore_proprioception}
 
     robot1_gripper_width:
       shape: [1]
@@ -80,7 +73,6 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
 
     robot0_eef_pos_wrt1:
       shape: [3]
@@ -88,7 +80,6 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
 
     robot0_eef_rot_axis_angle_wrt1:
       raw_shape: [3]
@@ -97,7 +88,6 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
 
     robot1_eef_pos_wrt0:
       shape: [3]
@@ -105,8 +95,7 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
-      
+
     robot1_eef_rot_axis_angle_wrt0:
       raw_shape: [3]
       shape: [6]
@@ -114,9 +103,10 @@ shape_meta: &shape_meta
       latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'} # float
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
 
-  action: 
+  action:
+    # Reference pose is internal data, independent of the network obs selection.
+    reference_latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'}
     # Select and order the robots whose actions the policy predicts.
     # Stored action order; null assumes all dataset robots in numeric order.
     # Set explicitly when the stored action has a subset or a different order.
