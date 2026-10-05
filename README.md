@@ -297,6 +297,7 @@ Zarr 与 LeRobot 均固定使用所选状态的未来轨迹作为 action 目标�
 推理端可复用 `diffusion_policy.common.pose_encoding.encode_field` 和 `decode_action`。
 `decode_action` 接受已反归一化的预测和相同参考 tf，返回绝对 tf/width；只预测位置或旋转时，
 返回该分量，不虚构未预测的分量。批量参考 tf 需要能与轨迹维度广播，例如 `[B,1,4,4]`。
+ONNX 元数据也保存 `pose_schema`，描述输入输出的表示与参考系；图内仍输出配置的表示。
 
 ## 从 Zarr 数据到 Diffusion 训练 batch
 

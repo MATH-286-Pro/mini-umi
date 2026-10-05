@@ -2,6 +2,7 @@
 import argparse
 import copy
 import json
+from dataclasses import asdict
 from pathlib import Path
 import dill
 import hydra
@@ -10,6 +11,8 @@ from diffusers import DDIMScheduler
 from omegaconf import OmegaConf
 from diffusion_policy.policy.diffusion_transformer_timm_policy import DiffusionTransformerTimmPolicy
 from diffusion_policy.policy.diffusion_unet_timm_policy import DiffusionUnetTimmPolicy
+from diffusion_policy.common.action_schema import resolve_action_spec
+from diffusion_policy.common.obs_schema import is_rgb_type
 
 class ObservationEncoderOnnx(torch.nn.Module):
     def __init__(self, policy, keys):
@@ -173,7 +176,12 @@ def export_policy_onnx(checkpoint, output_dir, weights="auto", opset=17, num_inf
     graph = helper.make_graph(top_nodes, "mini_umi_policy", [*encoder_model.graph.input, helper.make_tensor_value_info("initial_noise", TensorProto.FLOAT, action_shape)], [helper.make_tensor_value_info("action", TensorProto.FLOAT, action_shape)], initializer=[*encoder_model.graph.initializer, numpy_helper.from_array(np.asarray(inference_steps, dtype=np.int64), "trip_count"), numpy_helper.from_array(np.asarray(True, dtype=np.bool_), "initial_condition"), numpy_helper.from_array(offset, "action_offset"), numpy_helper.from_array(scale, "action_scale")])
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)], producer_name="mini-umi")
     model.ir_version = max(encoder_model.ir_version, denoiser_model.ir_version)
-    metadata = {"format_version": 2, "architecture": architecture, "weights": state_key, "num_inference_steps": inference_steps, "observations": [{"name": key, "shape": [int(shape_meta[key]["horizon"]), *map(int, shape_meta[key]["shape"])], "type": shape_meta[key].get("type", "low_dim")} for key in keys], "action_shape": [policy.action_horizon, policy.action_dim], "scheduler": {"class": type(policy.noise_scheduler).__name__, "config": _json_value(dict(policy.noise_scheduler.config))}, "onnx": {"opset": opset, "dynamic_batch": True}}
+    metadata = {"format_version": 2, "architecture": architecture, "weights": state_key, "num_inference_steps": inference_steps, "observations": [{"name": key, "shape": [int(shape_meta[key]["horizon"]), *map(int, shape_meta[key]["shape"])], "type": shape_meta[key]["type"]} for key in keys], "action_shape": [policy.action_horizon, policy.action_dim], "scheduler": {"class": type(policy.noise_scheduler).__name__, "config": _json_value(dict(policy.noise_scheduler.config))}, "onnx": {"opset": opset, "dynamic_batch": True}}
+    metadata['pose_schema'] = {
+        'observations': {key: {name: shape_meta[key][name] for name in ('source', 'type', 'relative_to') if name in shape_meta[key]} for key in keys if not is_rgb_type(type_name=shape_meta[key]['type'])},
+        'action': asdict(obj=resolve_action_spec(shape_meta=obs_encoder.shape_meta)),
+        'tf_convention': 'world_from_eef, column vectors, metres and radians',
+    }
     metadata_property = model.metadata_props.add()
     metadata_property.key = "mini_umi_policy"
     metadata_property.value = json.dumps(metadata, ensure_ascii=False)
