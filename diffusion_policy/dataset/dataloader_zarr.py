@@ -25,7 +25,7 @@ from tool.linalg import convert_pose_mat_rep, mat_to_pose10d, pose_to_mat
 
 register_codecs()
 
-class UmiDataset(BaseDataset):
+class UmiDatasetZarr(BaseDataset):
     def __init__(self,
         shape_meta: dict,
         dataset_path: str,
@@ -36,13 +36,19 @@ class UmiDataset(BaseDataset):
         repeat_frame_prob: float=0.0,
         seed: int=42,
         val_ratio: float=0.0,
-        max_duration: Optional[float]=None
+        max_duration: Optional[float]=None,
+        image_transform=None,
+        normalizer_num_workers: int=32,
+        replay_buffer: Optional[ReplayBuffer]=None
     ):
         self.pose_repr = pose_repr
         self.obs_pose_repr = self.pose_repr.get('obs_pose_repr', 'rel')
         self.action_pose_repr = self.pose_repr.get('action_pose_repr', 'rel')
         
-        if cache_dir is None:
+        if replay_buffer is not None:
+            if cache_dir is not None:
+                raise ValueError("cache_dir cannot be used with an injected replay_buffer")
+        elif cache_dir is None:
             # load into memory store
             with zarr.ZipStore(dataset_path, mode='r') as zip_store:
                 replay_buffer = ReplayBuffer.copy_from_store(
@@ -169,6 +175,8 @@ class UmiDataset(BaseDataset):
         self.sampler = sampler
         self.temporally_independent_normalization = temporally_independent_normalization
         self.threadpool_limits_is_applied = False
+        self.image_transform = image_transform
+        self.normalizer_num_workers = normalizer_num_workers
 
     
     def get_validation_dataset(self):
@@ -187,6 +195,7 @@ class UmiDataset(BaseDataset):
             max_duration=self.max_duration
         )
         val_set.val_mask = ~self.val_mask
+        val_set.image_transform = None
         return val_set
     
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
@@ -198,7 +207,7 @@ class UmiDataset(BaseDataset):
         dataloader = torch.utils.data.DataLoader(
             dataset=self,
             batch_size=64,
-            num_workers=32,
+            num_workers=self.normalizer_num_workers,
         )
         for batch in tqdm(dataloader, desc='iterating dataset to get normalization'):
             for key in self.lowdim_keys:
@@ -262,7 +271,10 @@ class UmiDataset(BaseDataset):
             # move channel last to channel first
             # T,H,W,C
             # convert uint8 image to float32
-            obs_dict[key] = np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.
+            image = torch.from_numpy(np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.)
+            if self.image_transform is not None:
+                image = self.image_transform(image)
+            obs_dict[key] = image
             # T,C,H,W
             del data[key]
         for key in self.sampler_lowdim_keys:
@@ -348,7 +360,7 @@ class UmiDataset(BaseDataset):
             action_pose_mat = convert_pose_mat_rep(
                 action_mat, 
                 base_pose_mat=pose_mat[-1],
-                pose_rep=self.obs_pose_repr,
+                pose_rep=self.action_pose_repr,
                 backward=False)
         
             # convert pose to pos + rot6d representation
@@ -365,7 +377,7 @@ class UmiDataset(BaseDataset):
         data['action'] = np.concatenate(actions, axis=-1)
         
         torch_data = {
-            'obs': dict_apply(obs_dict, torch.from_numpy),
+            'obs': dict_apply(obs_dict, lambda value: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)),
             'action': torch.from_numpy(data['action'].astype(np.float32))
         }
         return torch_data

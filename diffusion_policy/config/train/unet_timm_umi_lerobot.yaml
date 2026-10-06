@@ -1,0 +1,13 @@
+# @package _global_
+
+defaults:
+  - unet_timm_umi
+  - override /task: umi_lerobot
+  - _self_
+
+name: train_diffusion_unet_timm_lerobot
+
+# Augmentation is performed by UmiDatasetLeRobot on a complete image history.
+policy:
+  obs_encoder:
+    transforms: null
